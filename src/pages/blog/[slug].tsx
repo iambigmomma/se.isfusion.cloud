@@ -149,7 +149,7 @@ export default function SingleBlogPage({
                     content={
                       <>
                         {meta.devtoViews.toLocaleString()} views on{' '}
-                        <CustomLink href='https://dev.to/theodorusclarence'>
+                        <CustomLink href='https://dev.to/iambigmomma'>
                           dev.to
                         </CustomLink>
                       </>
