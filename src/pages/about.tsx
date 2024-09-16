@@ -40,9 +40,9 @@ export default function AboutPage() {
               /> */}
               <CloudinaryImg
                 className='float-right ml-6 w-36 md:w-72'
-                publicId='v1660493139/personal-site/jeff-amsterdam2'
+                publicId='v1660493139/personal-site/jeff-101-square'
                 width='3072'
-                height='3071'
+                height='3072'
                 alt='Jeff Fan'
                 preview={true}
               />
