@@ -32,8 +32,9 @@ Stable Diffusion can run on a CPU, but it's slow. Running it on a GPU drasticall
    Instead of using the root user for everything, it’s better to create a new user for security reasons:
 
 ```bash
-adduser your_username
-usermod -aG sudo your_username
+adduser do-shark
+usermod -aG sudo do-shark
+su do-shark
 ```
 
 ## Step 2: Install Dependencies
@@ -56,7 +57,7 @@ cd stable-diffusion-webui
 
 ## Step 4: Configure and Run Stable Diffusion
 
-1. **Set Up a Python Virtual Environment**:
+1. **Set Up a Python Virtual Environment**
 
 ```bash
 python3 -m venv venv
@@ -64,7 +65,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-2. \*\* Modifying `webui-user.sh` to Enable Public Access via Gradio and API
+2. **Modifying `webui-user.sh` to Enable Public Access via Gradio and API**
 
 To ensure that you can get a public accessible link via Gradio, enable the GPU accerlation by xformers and enable the backend API, follow these steps to modify the `webui-user.sh` file.
 
@@ -74,9 +75,9 @@ To ensure that you can get a public accessible link via Gradio, enable the GPU a
   ```
 - Add the following line before any other commands:
 
-```bash
-export COMMANDLINE_ARGS="--share --api --xformers"
-```
+  ```bash
+  export COMMANDLINE_ARGS="--share --api --xformers"
+  ```
 
 - Save and close the file. In nano, this can be done by pressing CTRL + X, then typing Y to confirm, and hitting Enter.
 
@@ -85,9 +86,10 @@ Once this is done, Gradio will generate a public link for external access, and t
 3. **Run the WebUI**  
    Start the Stable Diffusion WebUI with:
 
-```bash
-./webui.sh
-```
+   ```bash
+   chmod +x webui.sh
+   ./webui.sh
+   ```
 
 Open your browser and go to \`http://your_droplet_ip:7860` to access the interface.
 
@@ -108,9 +110,9 @@ To install and use `gpustat`, follow these steps:
 
 2. After installation, you can monitor your GPU utilization by running the following command:
 
-```bash
-gpustat --color -i 1
-```
+   ```bash
+   gpustat --color -i 1
+   ```
 
 ![gpustat](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/gpustat.png)
 
@@ -122,6 +124,7 @@ After running the `web-ui.sh` script, you may encounter an issue where the syste
 2. Go to the **"Available"** sub-tab.
 3. Click the orange button labeled **"Load from"** to load the available extensions from the repository.
 4. In the search bar, type **"CivitAI Browser+"** and click the **Install** button.
+   ![extensions](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/extensions.png)
 5. Once the installation is complete, go to the **"Installed"** sub-tab.
 6. Click **Apply and restart UI** to activate the extension.
 
