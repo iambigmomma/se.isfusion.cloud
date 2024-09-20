@@ -6,24 +6,22 @@ banner: 'do-stable-diffusion'
 tags: 'cloud, GPU, ,generative-art, AI, diffusion'
 ---
 
-# Running Stable Diffusion on a DigitalOcean GPU Droplet
-
 ## Introduction
 
-Stable Diffusion is a powerful AI tool for generating images, but it can be resource-heavy. Running it on a DigitalOcean GPU droplet ensures you have the computing power you need. In this guide, we’ll walk through how to set it up using the [Stable Diffusion WebUI by AUTOMATIC1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui). We’ve made it easy, so even if you're not a technical expert, don’t worry—just follow along!
+Stable Diffusion is a powerful AI tool for generating images, but it can be resource-heavy. Running it on a DigitalOcean GPU droplet gives you the computing power you need. In this guide, we’ll learn how to set it up using the [Stable Diffusion WebUI by AUTOMATIC1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui). We’ve made it easy, so even if you're not a technical expert, don’t worry—just follow along!
 
 ## Prerequisites
 
-- A DigitalOcean account
-- A GPU Droplet (such as NVIDIA GPU)
-- Basic terminal knowledge
-- Installed Git and Python 3.10
+- A [DigitalOcean Cloud account](https://cloud.digitalocean.com/).
+- A [GPU Droplet](https://www.digitalocean.com/products/gpu-droplets).
+- Familiarity with the Linux command line. To learn more, you can visit this guide on [Linux command line primer](https://www.digitalocean.com/community/tutorials/a-linux-command-line-primer).
+- Installed Git and Python 3.10.
 
 ## Why Use a GPU Droplet?
 
-Stable Diffusion can run on a CPU, but it's slow. Running it on a GPU drastically improves the performance, and with DigitalOcean's offerings, you don't need the latest H100 GPU to see improvements—though that's an option if you want top-tier performance. By spinning up a GPU droplet, you can easily compare the differences between CPU and GPU rendering.
+Stable Diffusion can run on a CPU, but it's slow. Running it on a GPU drastically improves the performance. With DigitalOcean's offerings, you don't need the latest H100 GPU to see improvements—though that's an option if you want top-tier performance. You can easily compare the differences between CPU and GPU rendering by spinning up a GPU droplet.
 
-## Step 1: Set Up the GPU Droplet
+## Step 1-Set Up the GPU Droplet
 
 1. **Create a GPU Droplet**  
    Log into your DigitalOcean account, create a new droplet, and choose a plan that includes a GPU. A basic GPU plan should suffice for image generation.
@@ -37,7 +35,7 @@ usermod -aG sudo do-shark
 su do-shark
 ```
 
-## Step 2: Install Dependencies
+## Step 2-Install Dependencies
 
 Once you're logged in, update the droplet and install the necessary tools:
 
@@ -46,18 +44,18 @@ sudo apt update
 sudo apt install -y wget git python3 python3-venv
 ```
 
-## Step 3: Clone the Stable Diffusion Repository
+## Step 3-Clone the Stable Diffusion Repository
 
-Clone the repository from GitHub:
+Clone [this](https://github.com/AUTOMATIC1111/stable-diffusion-webui.git) repository from GitHub:
 
 ```bash
 git clone https://github.com/AUTOMATIC1111/stable-diffusion-webui.git
 cd stable-diffusion-webui
 ```
 
-## Step 4: Configure and Run Stable Diffusion
+## Step 4-Configure and Run Stable Diffusion
 
-1. **Set Up a Python Virtual Environment**
+### Set Up a Python Virtual Environment
 
 ```bash
 python3 -m venv venv
@@ -65,33 +63,36 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-2. **Modifying `webui-user.sh` to Enable Public Access via Gradio and API**
+### Modifying `webui-user.sh` to Enable Public Access via Gradio and API
 
-To ensure that you can get a public accessible link via Gradio, enable the GPU accerlation by xformers and enable the backend API, follow these steps to modify the `webui-user.sh` file.
+To ensure that you can get a publicly accessible link via Gradio, enable the GPU acceleration by formers, and enable the backend API, follow these steps to modify the `webui-user.sh` file.
 
 - Open the `webui-user.sh` file using a text editor:
+
   ```bash
   nano webui-user.sh
   ```
+
 - Add the following line before any other commands:
 
   ```bash
   export COMMANDLINE_ARGS="--share --api --xformers"
   ```
 
-- Save and close the file. In nano, this can be done by pressing CTRL + X, then typing Y to confirm, and hitting Enter.
+- Save and close the file. In nano, this can be done by pressing **CTRL + X**, then typing **Y** to confirm, and hitting Enter.
 
 Once this is done, Gradio will generate a public link for external access, and the backend API will also be enabled for further integrations.
 
-3. **Run the WebUI**  
-   Start the Stable Diffusion WebUI with:
+### Run the WebUI
 
-   ```bash
-   chmod +x webui.sh
-   ./webui.sh
-   ```
+Start the Stable Diffusion WebUI with:
 
-Open your browser and go to \`http://your_droplet_ip:7860` to access the interface.
+```bash
+chmod +x webui.sh
+./webui.sh
+```
+
+Open your browser and go to `http://your_droplet_ip:7860` to access the interface.
 
 ![sd-portal](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/sd-portal.png)
 
@@ -105,7 +106,6 @@ To install and use `gpustat`, follow these steps:
 
    ```bash
    pip install gpustat
-
    ```
 
 2. After installation, you can monitor your GPU utilization by running the following command:
@@ -130,20 +130,20 @@ After running the `web-ui.sh` script, you may encounter an issue where the syste
 
    ![civitai-browser](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/civitai-browser.png)
 
-Once the WebUI restarts, you will see a new tab called **"CivitAI Browser+"**. This extension allows you to easily search for and install models directly from CivitAI.
+Once the WebUI restarts, you will see a new tab called **"CivitAI Browser+"**. This extension lets you easily search for and install models directly from CivitAI.
 
 For this demo, let’s search for **"Western Animation"** within the CivitAI Browser+ tab and install it. Choose the one with **Superman** thumbnail. We will use this model for the next part of the crash course to generate images using text-to-image (txt2img).
 ![western-animation](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/western-animation.png)
 
-# Your First Gen-AI Art: Stable Diffusion Prompt Writing Tutorial
+## Your First Gen-AI Art: Stable Diffusion Prompt Writing Tutorial
 
 Stable Diffusion is a powerful AI image generation tool that uses positive prompts and negative prompts to guide the AI in creating specific images. This tutorial will show you how to write prompts related to marine life and how to use negative prompts to improve the quality of your images in Stable Diffusion WebUI.
 
-### How to Write Prompts
+## How to Write Prompts
 
 Prompts are the core part of generating images. Positive prompts tell the AI what you want to see, while negative prompts help exclude unwanted elements. Here are examples related to marine life to show you how to write prompts.
 
-#### 1. Writing Positive Prompts
+### 1. Writing Positive Prompts
 
 When writing prompts, use English to describe what you want to generate. You can use simple sentences or comma-separated keywords to describe the features. Here are some marine life-related examples:
 
@@ -162,9 +162,11 @@ When writing prompts, use English to describe what you want to generate. You can
    ![sea-tutle](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/sea-turtle.png)
 
 2. **Generate a school of colorful fish**:
+
    ```text
    colorful fish, swimming in the ocean, school of fish, tropical fish
    ```
+
    ![colorful-fish-tutle](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/colorful-fish.png)
 
 #### 2. Using Negative Prompts
@@ -222,9 +224,11 @@ Stable Diffusion WebUI provides different syntaxes to improve the precision of i
   ![blue-dolphin](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/blue-dolphin.png)
 
 - **Prompt Switching**: You can switch prompts during the generation process with this syntax:
+
   ```text
   [shark : whale : 10] swimming in the ocean
   ```
+
   ![shark-whale](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/shark-whale.png)
 
 ### Example Prompts
@@ -258,17 +262,19 @@ Stable Diffusion WebUI provides different syntaxes to improve the precision of i
    ![dolphin-jump](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/dolphin-jump.png)
 
 3. **Generate a shark swimming in deep water**:
+
    ```text
    shark, swimming, deep ocean, dark blue water, scary, realistic
    ```
+
    Negative prompt:
+
    ```text
    lowres, bad anatomy, blurry, text, human, building
    ```
+
    ![shark-swimming](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/shark-swimming.png)
 
-## Final Thoughts
+## Conclusion
 
-This is just the beginning of your journey in creating Gen-AI art with Stable Diffusion on DigitalOcean's GPU Droplets. In the upcoming series, we’ll dive deeper into how to run a dockerized Stable Diffusion API with GPU DOKS, and explore real-world use cases alongside other DigitalOcean products. Stay tuned for more exciting insights and tutorials!
-
----
+This is just the beginning of your journey in creating Gen-AI art with Stable Diffusion on DigitalOcean's GPU Droplets. In the upcoming series, we’ll dive deeper into how to run a dockerized Stable Diffusion API with GPU [DigitalOcean Kubernetes](https://www.digitalocean.com/products/kubernetes) and explore real-world use cases alongside other DigitalOcean products. Stay tuned for more exciting insights and tutorials!
