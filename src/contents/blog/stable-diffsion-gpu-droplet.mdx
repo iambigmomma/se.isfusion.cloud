@@ -8,23 +8,23 @@ tags: 'cloud, GPU, ,generative-art, AI, diffusion'
 
 ## Introduction
 
-Stable Diffusion is a powerful AI tool for generating images, but it can be resource-heavy. Running it on a DigitalOcean GPU droplet gives you the computing power you need. In this guide, we’ll learn how to set it up using the [Stable Diffusion WebUI by AUTOMATIC1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui). We’ve made it easy, so even if you're not a technical expert, don’t worry—just follow along!
+Stable Diffusion is a powerful AI tool for generating images, but it can be resource-heavy. Running it on a DigitalOcean GPU Droplet gives you the computing power you need. In this guide, we’ll learn how to set it up using the [Stable Diffusion WebUI by AUTOMATIC1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui). We’ve made it easy, so even if you're not a technical expert, don’t worry—just follow along!
 
 ## Prerequisites
 
 - A [DigitalOcean Cloud account](https://cloud.digitalocean.com/).
-- A [GPU Droplet](https://www.digitalocean.com/products/gpu-droplets).
+- A [GPU Droplet](https://www.digitalocean.com/products/gpu-droplets). GPU Droplets are currently in early availability, but you can [request access here](https://cloud.digitalocean.com/account/feature-preview?feature=droplet_gpu_sizes_available).
 - Familiarity with the Linux command line. To learn more, you can visit this guide on [Linux command line primer](https://www.digitalocean.com/community/tutorials/a-linux-command-line-primer).
 - Installed Git and Python 3.10.
 
 ## Why Use a GPU Droplet?
 
-Stable Diffusion can run on a CPU, but it's slow. Running it on a GPU drastically improves the performance. With DigitalOcean's offerings, you don't need the latest H100 GPU to see improvements—though that's an option if you want top-tier performance. You can easily compare the differences between CPU and GPU rendering by spinning up a GPU droplet.
+Stable Diffusion can technically run on a CPU, but it's slow. Running it on a GPU drastically improves the performance—DigitalOcean's GPU Droplets are NVIDIA H100s that you can spin up on-demand—try them out by [spinning up a GPU Droplet](https://cloud.digitalocean.com/account/feature-preview?feature=droplet_gpu_sizes_available) today. Note these are currently in early availability, and will be released for everyone soon!
 
 ## Step 1-Set Up the GPU Droplet
 
 1. **Create a GPU Droplet**  
-   Log into your DigitalOcean account, create a new droplet, and choose a plan that includes a GPU. A basic GPU plan should suffice for image generation.
+   Log into your DigitalOcean account, create a new Droplet, and choose a plan that includes a GPU. A basic GPU plan should suffice for image generation.
 
 2. **Add a New User (Recommended)**  
    Instead of using the root user for everything, it’s better to create a new user for security reasons:
@@ -33,11 +33,12 @@ Stable Diffusion can run on a CPU, but it's slow. Running it on a GPU drasticall
 adduser do-shark
 usermod -aG sudo do-shark
 su do-shark
+cd ~/
 ```
 
 ## Step 2-Install Dependencies
 
-Once you're logged in, update the droplet and install the necessary tools:
+Once you're logged in, update the Droplet and install the necessary tools:
 
 ```bash
 sudo apt update
@@ -63,38 +64,14 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Modifying `webui-user.sh` to Enable Public Access via Gradio and API
+### Rebuild xFormers with CUDA Support
 
-To ensure that you can get a publicly accessible link via Gradio, enable the GPU acceleration by formers, and enable the backend API, follow these steps to modify the `webui-user.sh` file.
-
-- Open the `webui-user.sh` file using a text editor:
-
-  ```bash
-  nano webui-user.sh
-  ```
-
-- Add the following line before any other commands:
-
-  ```bash
-  export COMMANDLINE_ARGS="--share --api --xformers"
-  ```
-
-- Save and close the file. In nano, this can be done by pressing **CTRL + X**, then typing **Y** to confirm, and hitting Enter.
-
-Once this is done, Gradio will generate a public link for external access, and the backend API will also be enabled for further integrations.
-
-### Run the WebUI
-
-Start the Stable Diffusion WebUI with:
+To take advantage of GPU acceleration, you’ll need to rebuild xFormers with CUDA support. This step ensures your environment is optimized for performance:
 
 ```bash
-chmod +x webui.sh
-./webui.sh
+pip uninstall xformers
+pip install xformers --extra-index-url https://download.pytorch.org/whl/nightly/cu118
 ```
-
-Open your browser and go to `http://your_droplet_ip:7860` to access the interface.
-
-![sd-portal](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/sd-portal.png)
 
 ### Optional: Monitor GPU Utilization with `gpustat`
 
@@ -102,38 +79,62 @@ If you want to monitor your GPU utilization while running Stable Diffusion, you 
 
 To install and use `gpustat`, follow these steps:
 
-1. Install `gpustat` using `pip`:
+Install `gpustat` using `pip`:
 
-   ```bash
-   pip install gpustat
-   ```
+```bash
+pip install gpustat
+```
 
-2. After installation, you can monitor your GPU utilization by running the following command:
+After installation, you can monitor your GPU utilization by running the following command in another terminal:
 
-   ```bash
-   gpustat --color -i 1
-   ```
+```bash
+gpustat --color -i 1
+```
 
-![gpustat](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/gpustat.png)
+![gpustat](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/gpustat.png)
+
+### Optional: Installing a Model From a Direct Link
+
+If you have a model download link, you can easily install it using the wget command. Here’s how to download and install the SDXL model:
+
+```bash
+wget -O models/Stable-diffusion/stable-diffusion-xl.safetensors "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors"
+```
+
+This command downloads the SDXL model and saves it in the `models/Stable-diffusion/ directory` with the filename `stable-diffusion-xl.safetensors`. Once the download is complete, the model will be ready for use in your Stable Diffusion setup.
+
+### Run the WebUI
+
+Now, it’s time to launch the Stable Diffusion WebUI. Run the following command to start the interface with Gradio sharing, xFormers for GPU acceleration, enable insecure extension access and API access enabled:
+
+```bash
+./webui.sh --share --xformers --api --enable-insecure-extension-access
+```
+
+Once the WebUI is running, open your browser and go to `https://[HASHING].gradio.live` to access the interface. Note that this link will expire in 72 hours.
+
+![sd-portal](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/sd-portal.png)
 
 ## Installing a Model Using CivitAI Browser Extension
 
-After running the `web-ui.sh` script, you may encounter an issue where the system cannot download the default model because RunwayML has removed it from the site. To ensure you can still have a model running, follow these steps to install a model through the CivitAI Browser extension:
+After running the `web-ui.sh` script, you can follow these steps to install a model through the CivitAI Browser extension:
 
 1. Navigate to the **"Extensions"** tab in the WebUI.
 2. Go to the **"Available"** sub-tab.
 3. Click the orange button labeled **"Load from"** to load the available extensions from the repository.
 4. In the search bar, type **"CivitAI Browser+"** and click the **Install** button.
-   ![extensions](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/extensions.png)
+   ![extensions](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/extensions.png)
 5. Once the installation is complete, go to the **"Installed"** sub-tab.
 6. Click **Apply and restart UI** to activate the extension.
 
-   ![civitai-browser](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/civitai-browser.png)
+   ![civitai-browser](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/civitai-browser.png)
+
+7. After clicking the restart button, your console may appear to stop at "Reloading" due to the relaunch. Click the new `https://[HASHING].gradio.live` link from terminal.
 
 Once the WebUI restarts, you will see a new tab called **"CivitAI Browser+"**. This extension lets you easily search for and install models directly from CivitAI.
 
 For this demo, let’s search for **"Western Animation"** within the CivitAI Browser+ tab and install it. Choose the one with **Superman** thumbnail. We will use this model for the next part of the crash course to generate images using text-to-image (txt2img).
-![western-animation](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/western-animation.png)
+![western-animation](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/western-animation.png)
 
 ## Your First Gen-AI Art: Stable Diffusion Prompt Writing Tutorial
 
@@ -159,7 +160,7 @@ When writing prompts, use English to describe what you want to generate. You can
    sea turtle, swimming, coral reef, ocean
    ```
 
-   ![sea-tutle](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/sea-turtle.png)
+   ![sea-tutle](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/sea-turtle.png)
 
 2. **Generate a school of colorful fish**:
 
@@ -167,7 +168,7 @@ When writing prompts, use English to describe what you want to generate. You can
    colorful fish, swimming in the ocean, school of fish, tropical fish
    ```
 
-   ![colorful-fish-tutle](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/colorful-fish.png)
+   ![colorful-fish-tutle](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/colorful-fish.png)
 
 #### 2. Using Negative Prompts
 
@@ -204,12 +205,12 @@ Stable Diffusion WebUI's txt2image feature allows you to generate images based o
    Try "DPM++ 2M SDE Heun", or "Euler a" for sampling methods.
 
 3. **Set Image Dimensions and Steps**:
-   Set the width and height to 1024x512 and sampling steps to 20. You can also select "Restore faces" to improve details in the image, which might help even with marine life.
+   Set the width and height to 1024x512 and sampling steps to 30. You can also select "Hires. fix" with default value to improve details in the image, which might help even with marine life.
 
 4. **Generate the Image**:
    Click the "Generate" button on the top right to start generating the image. Once done, you can save or adjust the image as needed.
 
-   ![colorful-fish-tutle](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/colorful-fish-coral.png)
+   ![colorful-fish-tutle](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/colorful-fish-coral.png)
 
 ### Common Syntax and Extensions
 
@@ -221,7 +222,7 @@ Stable Diffusion WebUI provides different syntaxes to improve the precision of i
   dolphin, ((blue)), ocean, swimming
   ```
 
-  ![blue-dolphin](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/blue-dolphin.png)
+  ![blue-dolphin](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/blue-dolphin.png)
 
 - **Prompt Switching**: You can switch prompts during the generation process with this syntax:
 
@@ -229,7 +230,7 @@ Stable Diffusion WebUI provides different syntaxes to improve the precision of i
   [shark : whale : 10] swimming in the ocean
   ```
 
-  ![shark-whale](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/shark-whale.png)
+  ![shark-whale](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/shark-whale.png)
 
 ### Example Prompts
 
@@ -245,7 +246,7 @@ Stable Diffusion WebUI provides different syntaxes to improve the precision of i
    lowres, blurry, bad anatomy, text, human
    ```
 
-   ![octopus](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/octopus.png)
+   ![octopus](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/octopus.png)
 
 2. **Generate a dolphin jumping out of the water**:
 
@@ -259,7 +260,7 @@ Stable Diffusion WebUI provides different syntaxes to improve the precision of i
    lowres, bad anatomy, blurry, text, car, building
    ```
 
-   ![dolphin-jump](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/dolphin-jump.png)
+   ![dolphin-jump](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/dolphin-jump.png)
 
 3. **Generate a shark swimming in deep water**:
 
@@ -273,8 +274,8 @@ Stable Diffusion WebUI provides different syntaxes to improve the precision of i
    lowres, bad anatomy, blurry, text, human, building
    ```
 
-   ![shark-swimming](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/stable-diffusion-gpu-droplet/shark-swimming.png)
+   ![shark-swimming](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/shark-swimming.png)
 
 ## Conclusion
 
-This is just the beginning of your journey in creating Gen-AI art with Stable Diffusion on DigitalOcean's GPU Droplets. In the upcoming series, we’ll dive deeper into how to run a dockerized Stable Diffusion API with GPU [DigitalOcean Kubernetes](https://www.digitalocean.com/products/kubernetes) and explore real-world use cases alongside other DigitalOcean products. Stay tuned for more exciting insights and tutorials!
+This is just the beginning of your journey in creating Gen-AI art with Stable Diffusion on DigitalOcean's [GPU Droplets](https://www.digitalocean.com/products/gpu-droplets). In the upcoming series, we’ll dive deeper into running a dockerized Stable Diffusion API with GPU [DigitalOcean Kubernetes](https://www.digitalocean.com/products/kubernetes) and explore real-world use cases alongside other DigitalOcean products. Stay tuned for more exciting insights and tutorials!
