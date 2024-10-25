@@ -3,7 +3,7 @@ title: 'Deploying Hugging Face Generative AI Services(HUGS) on DigitalOcean GPU 
 publishedAt: '2024-10-25'
 description: 'Effortlessly deploy large language models using HUGS on DigitalOcean GPU droplets without writing a single line of code. With the intuitive OpenWeb UI, users can create custom ChatGPT-like services, setting up inference endpoints in just a few clicks. Experience the simplicity of building and customizing AI services, all through a clean, user-friendly interface that connects directly to your large language models'
 banner: 'hugs-banner'
-tags: 'GPU, ,LLM, HuggingFace'
+tags: 'GPU,LLM,HuggingFace'
 ---
 
 # Deploying HuggingFace HUGS on DigitalOcean GPU Droplet and Integrating with Open Web UI
@@ -50,7 +50,7 @@ Launch Open Web UI using Docker by running the following command on a seperate d
 docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main
 ```
 
-Open Web UI will start on port 3000, accessible via \`http://<your_droplet_ip>:3000\`.
+Open Web UI will start on port 3000, accessible via `http://<your_droplet_ip>:3000`.
 
 ### Step 4: Integrate HUGS with Open Web UI
 
@@ -70,7 +70,7 @@ To connect Open Web UI with HUGS on DigitalOcean's GPU droplet:
 
 3. **Set the Inference Endpoint**:
 
-   - In the **API link field**, enter your droplet’s IP address followed by \`/v1\`. If a port is specified, include it, like \`http://<your_droplet_ip>/v1\`.
+   - In the **API link field**, enter your droplet’s IP address followed by \`/v1\`. If a port is specified, include it, like `http://<your_droplet_ip>/v1`.
    - Use the API token from the **Message of the Day (MOTD)** for authentication.
 
 4. **Verify Connection**:
