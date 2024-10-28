@@ -1,14 +1,16 @@
 ---
-title: 'Deploying Hugging Face Generative AI Services(HUGS) on DigitalOcean GPU Droplet and Integrating with Open Web UI'
+title: 'Deploying HuggingFace Generative AI Services on DigitalOcean GPU Droplet and Integrating with Open WebUI'
 publishedAt: '2024-10-25'
-description: 'Effortlessly deploy large language models using HUGS on DigitalOcean GPU droplets without writing a single line of code. With the intuitive OpenWeb UI, users can create custom ChatGPT-like services, setting up inference endpoints in just a few clicks. Experience the simplicity of building and customizing AI services, all through a clean, user-friendly interface that connects directly to your large language models'
+description: 'Effortlessly deploy LLMs using HUGS on DigitalOcean GPU droplets without writing a single line of code. With the intuitive OpenWebUI, users can create custom ChatGPT-like services, setting up inference endpoints in just a few clicks. Experience the simplicity of building and customizing AI services, all through a clean, user-friendly interface that connects directly to your LLMs'
 banner: 'hugs-banner'
 tags: 'GPU,LLM,HuggingFace'
 ---
 
-# Deploying HuggingFace HUGS on DigitalOcean GPU Droplet and Integrating with Open Web UI
+Deploying and running inference on LLMs typically presents AI engineers with several challenges, including optimizing model performance on diverse hardware, managing scalable infrastructure, and meeting compliance and security requirements. These complexities often increase development time and resource usage, especially for companies looking to shift from closed APIs to more customizable, open-source solutions.
 
-This guide will help you set up Hugging Face Generative AI Services(HUGS) on a DigitalOcean GPU droplet, integrate it with Open Web UI, and explain why using DigitalOcean's infrastructure is simple and beneficial for LLM inference.
+[Hugging Face Generative AI Services (HUGS)](https://huggingface.co/docs/hugs) addresses these issues by providing a streamlined, API-compatible service optimized for various hardware configurations, enabling easy deployment of open models with minimal setup. This approach simplifies scalability, performance, and compliance management. DigitalOcean has partnered with HuggingFace to offer a [1-click deployment for HUGS](https://www.digitalocean.com/blog/one-click-models-on-do-powered-by-huggingface), making it easy to launch and run LLMs on DigitalOcean’s GPU-optimized infrastructure.
+
+This guide will help you set up HUGS on a DigitalOcean GPU droplet, integrate it with Open WebUI, and explain why using DigitalOcean's infrastructure is simple and beneficial for LLM inference.
 
 ## Step-by-Step Tutorial
 
@@ -28,11 +30,11 @@ This guide will help you set up Hugging Face Generative AI Services(HUGS) on a D
    ssh root@<your_droplet_public_IP>
    ```
 
-   Note the **Message of the Day (MOTD)** that contains your bearer token for API access. You’ll need this later to integrate with Open Web UI.
+   Note the **Message of the Day (MOTD)** that contains your bearer token for API access. You’ll need this later to integrate with Open WebUI.
 
 ![bear-token](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/hugs-gpu-droplet-open-webui/bear-token)
 
-### Step 2: Start Hugging Face Generative AI Services(HUGS)
+### Step 2: Start 1-click model deployment with HUGS on DigitalOcean GPU droplet
 
 After logging into your droplet, HuggingFace HUGS will automatically start. You can check the status of the Caddy service managing the inference API with:
 
@@ -40,27 +42,29 @@ After logging into your droplet, HuggingFace HUGS will automatically start. You 
 sudo systemctl status caddy
 ```
 
-Allow a few minutes for the model to fully load before interacting with it.
+Once deployed, allow 5 to 10 minutes for the model to warm up, though improvements to reduce this wait time are planned for future releases.
 
-### Step 3: Create a new droplet and deploy Open Web UI
+Check out this helpful walkthrough [video](https://www.youtube.com/watch?v=05t0JjX_plQ) available on YouTube.
 
-Launch Open Web UI using Docker by running the following command on a seperate droplet:
+### Step 3: Create a new droplet and deploy Open WebUI
+
+Launch Open WebUI using Docker by running the following command on a seperate droplet:
 
 ```bash
 docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main
 ```
 
-Open Web UI will start on port 3000, accessible via `http://<your_droplet_ip>:3000`.
+Open WebUI will start on port 3000, accessible via `http://<your_droplet_ip>:3000`.
 
-### Step 4: Integrate HUGS with Open Web UI
+### Step 4: Integrate HUGS with Open WebUI
 
-To connect Open Web UI with HUGS on DigitalOcean's GPU droplet:
+To connect [Open WebUI](https://openwebui.com/) with HUGS on DigitalOcean's GPU droplet:
 
 ![1-sign-up-open-webui](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/hugs-gpu-droplet-open-webui/1-sign-up-open-webui)
 
 1. **Open Admin Panel**:
 
-   - In Open Web UI, click your **user icon** at the bottom left, then click **Admin Panel**.
+   - In Open WebUI, click your **user icon** at the bottom left, then click **Admin Panel**.
 
 ![2-endpoint-setting](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/hugs-gpu-droplet-open-webui/2-endpoint-setting)
 
@@ -81,7 +85,7 @@ To connect Open Web UI with HUGS on DigitalOcean's GPU droplet:
 
 ### Step 5: Start Chatting with the Model!
 
-Congradulations! you’ve now successfully set up HUGS on a DigitalOcean GPU droplet and integrated it with Open Web UI. You’re ready to start interacting with your LLM and monitoring responses in real time!
+Congradulations! you’ve now successfully set up HUGS on a DigitalOcean GPU droplet and integrated it with Open WebUI. You’re ready to start interacting with your LLM and monitoring responses in real time!
 
 - Ask questions like `What is DigitalOcean?`
 
@@ -105,24 +109,18 @@ Check the logging from container while asking a follow-up question: `Does Digita
 
 ## Final Thoughts: Why Use HUGS on DigitalOcean GPU Droplet?
 
-### 1. **Optimized Performance for Large-Scale Inference**
-
-Using HUGS on DigitalOcean’s GPU droplets means you get a fully optimized backend. HuggingFace has pre-configured these models to run at maximum efficiency on GPUs, removing the need for manual optimization. This results in fast, reliable inference, without the need to worry about hardware tuning.
-
-**Key Point**: When running large language models like MetaLlama, HUGS on DigitalOcean ensures that the GPU resources are fully optimized for performance, delivering faster and more efficient responses compared to local setups.
-
-### 2. **Scalability and Flexibility**
-
-DigitalOcean’s infrastructure is designed for scalability. You can deploy multiple GPU droplets and use global load balancers to handle higher traffic or serve users across different regions. This setup provides fault tolerance, high availability, and seamless horizontal scaling.
-
-**Key Point**: The ability to scale your deployment globally and handle traffic efficiently is a major advantage over local setups, ensuring that the model can serve users from different regions with low latency.
-
-### 3. **Ease of Deployment and Simplified Management**
+### 1. **Ease of Deployment and Simplified Management**
 
 With DigitalOcean’s one-click deployment, setting up HuggingFace HUGS is incredibly simple. You don’t need to configure hardware manually or worry about optimizing models for your infrastructure. HUGS and DigitalOcean take care of these aspects, allowing you to focus on scaling and customizing the deployment.
 
-**Key Point**: The simplicity of deployment combined with high performance makes this setup ideal for developers who want powerful models without managing backend complexities.
+### 2. **Optimized Performance for Large-Scale Inference**
+
+Using HUGS on DigitalOcean’s GPU droplets means you get a fully optimized backend. HuggingFace has pre-configured these models to run at maximum efficiency on GPUs, removing the need for manual optimization. This results in fast, reliable inference, without the need to worry about hardware tuning.
+
+### 3. **Scalability and Flexibility**
+
+DigitalOcean’s infrastructure is designed for scalability. You can deploy multiple GPU droplets and use global or regional load balancers to handle higher traffic or serve users across different regions. This setup provides fault tolerance, high availability, and seamless horizontal scaling.
 
 ---
 
-By using HuggingFace’s HUGS on DigitalOcean GPU droplets, you not only benefit from high-performance large language model inference but also gain the flexibility to scale and manage the deployment effortlessly. This combination of optimized hardware, scalability, and simplicity makes DigitalOcean an excellent choice for production-level AI workloads.
+By using HuggingFace HUGS on DigitalOcean GPU droplets, you not only benefit from high-performance LLM inference but also gain the flexibility to scale and manage the deployment effortlessly. This combination of optimized hardware, scalability, and simplicity makes DigitalOcean an excellent choice for production-level AI workloads.
