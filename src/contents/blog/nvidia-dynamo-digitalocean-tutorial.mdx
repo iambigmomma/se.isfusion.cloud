@@ -97,7 +97,21 @@ NVIDIA Dynamo is the successor to Triton for LLM workloads, bringing several inn
 
 ## Step 1: Choose Droplet Specifications and Initialize Environment
 
-> Why: Choosing the right specifications ensures smooth LLM inference, and environment initialization is the foundation for all deployments.
+<details>
+  <summary>🤔 Why This Step Matters</summary>
+  
+**Foundation for Success**: Choosing the right GPU specifications is critical for NVIDIA Dynamo's performance. Unlike traditional CPU-based applications, LLM inference requires:
+
+- **GPU Memory Requirements**: Modern LLMs like DeepSeek-R1-Distill-Llama-8B require 8-16GB GPU memory for efficient inference
+- **Compute Capability**: NVIDIA L40s, RTX 6000 Ada, and RTX 4000 Ada provide the CUDA cores needed for parallel matrix operations
+- **Memory Bandwidth**: High-bandwidth memory ensures fast data transfer between GPU cores and memory
+- **AI/ML Ready Images**: Pre-configured with NVIDIA drivers, CUDA toolkit, and essential libraries, saving 30-45 minutes of setup time
+
+**Cost Optimization**: Selecting appropriate specifications prevents over-provisioning (wasting money) or under-provisioning (poor performance). The recommended 32GB+ system RAM ensures smooth container operations and model loading.
+
+**Scalability Foundation**: Starting with the right base configuration makes future scaling decisions easier and more predictable.
+
+</details>
 
 - Recommend choosing AI/ML Ready Image
 - GPU models: L40s, RTX 6000 Ada, RTX 4000 Ada
@@ -107,7 +121,24 @@ NVIDIA Dynamo is the successor to Triton for LLM workloads, bringing several inn
 
 ## Step 2: Environment Setup and Prerequisites
 
-> Why: Set up the complete environment with all necessary dependencies for Dynamo deployment.
+<details>
+  <summary>🤔 Why This Step Matters</summary>
+  
+**Complete Infrastructure Foundation**: This step establishes the entire software stack required for NVIDIA Dynamo deployment:
+
+- **System Updates**: Ensures security patches and compatibility with latest NVIDIA drivers
+- **Essential Packages**: `python3-dev`, `libucx0`, and other dependencies are required for Dynamo's Rust and Python components
+- **Docker with GPU Support**: Critical for containerized deployment - without proper GPU passthrough, containers cannot access NVIDIA hardware
+- **NVIDIA Container Toolkit**: Bridges Docker and NVIDIA drivers, enabling `--gpus` flag functionality
+- **System Reboot**: Ensures kernel modules and driver changes take effect properly
+
+**Why Reboot is Essential**: The NVIDIA Container Toolkit modifies system-level configurations. Without reboot, you may encounter "device driver not found" errors or GPU access failures in containers.
+
+**DigitalOcean CLI Integration**: `doctl` enables seamless integration with DigitalOcean Container Registry (DOCR), essential for storing and deploying custom Dynamo images in production environments.
+
+**Time Investment**: This 15-20 minute setup prevents hours of troubleshooting later and ensures a stable foundation for all subsequent steps.
+
+</details>
 
 ### System Update and Essential Packages
 
@@ -115,14 +146,6 @@ NVIDIA Dynamo is the successor to Triton for LLM workloads, bringing several inn
 sudo apt-get update && sudo apt-get upgrade -y
 sudo apt-get install -y python3-dev python3-pip python3-venv libucx0 git ca-certificates curl snapd jq
 ```
-
-### Verify NVIDIA Drivers
-
-```bash
-nvidia-smi
-```
-
-![nvidia_smi](https://res.cloudinary.com/iambigmomma/image/upload/v1749459375/blog/nvidia-dynamo-digitalocean-tutorial/nvidia_smi.png)
 
 ### Install Docker with GPU Support
 
@@ -138,6 +161,13 @@ curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-
 sudo apt-get update && sudo apt-get install -y nvidia-docker2
 sudo systemctl restart docker
 
+# Reboot system to ensure all changes take effect
+sudo reboot
+```
+
+**⚠️ Important**: After reboot, reconnect to your Droplet and verify GPU access:
+
+```bash
 # Test GPU access in containers
 docker run --rm --gpus all nvidia/cuda:12.3.0-base-ubuntu22.04 nvidia-smi
 ```
@@ -158,7 +188,25 @@ doctl registry login
 
 ## Step 3: Set Up Python Virtual Environment and Install Dynamo
 
-> Why: Using virtual environment avoids package conflicts, ensuring clean Dynamo installation.
+<details>
+  <summary>🤔 Why This Step Matters</summary>
+  
+**Dependency Isolation**: Python virtual environments prevent conflicts between different projects and system packages:
+
+- **Version Control**: Dynamo requires specific versions of PyTorch, transformers, and other ML libraries
+- **Clean Installation**: Avoids conflicts with system Python packages that might break other applications
+- **Reproducible Environments**: Ensures consistent behavior across different deployments and team members
+- **Easy Cleanup**: Virtual environments can be deleted and recreated without affecting the system
+
+**Why `ai-dynamo[all]`**: The `[all]` extra installs optional dependencies including:
+
+- **Monitoring Tools**: Prometheus metrics and observability components
+- **Additional Backends**: Support for different model formats and optimization libraries
+- **Development Tools**: Debugging and profiling utilities
+
+**Production Best Practice**: Virtual environments are essential for production deployments, making dependency management predictable and maintainable.
+
+</details>
 
 ```bash
 apt-get update
@@ -171,7 +219,25 @@ pip install "ai-dynamo[all]"
 
 ## Step 4: Download Dynamo Source Code
 
-> Why: Get official source code and switch to stable version, ensuring consistent deployment process.
+<details>
+  <summary>🤔 Why This Step Matters</summary>
+  
+**Version Stability**: Using the official source code and checking out a specific tag (v0.3.0) ensures:
+
+- **Reproducible Builds**: Everyone following this tutorial gets identical results
+- **Tested Compatibility**: v0.3.0 is a stable release with known compatibility with DigitalOcean GPU Droplets
+- **Bug Fixes**: Avoids issues present in development branches or newer unstable versions
+- **Documentation Alignment**: Tutorial instructions match the specific version's API and configuration
+
+**Source Code Access**: Having the full source code enables:
+
+- **Custom Modifications**: Ability to modify configurations, add custom metrics, or debug issues
+- **Container Building**: Required for creating custom Docker images with your specific requirements
+- **Understanding Architecture**: Access to examples, configurations, and documentation
+
+**Git Tag Strategy**: Using `git fetch --tags` and `git checkout v0.3.0` ensures you get the exact version tested with this tutorial, preventing version-related deployment issues.
+
+</details>
 
 ```bash
 git clone https://github.com/ai-dynamo/dynamo.git
@@ -182,7 +248,38 @@ git checkout v0.3.0
 
 ## Step 5: Build and Push Dynamo Base Image to DOCR
 
-> Why: Self-built images ensure environment consistency, pushing to DOCR facilitates team collaboration and automation.
+<details>
+  <summary>🤔 Why This Step Matters</summary>
+  
+**Custom Image Benefits**: Building your own Dynamo image provides several advantages:
+
+- **Environment Consistency**: Your image contains exactly the dependencies and configurations you need
+- **Security Control**: You know exactly what's in your container, reducing security risks
+- **Customization**: Ability to add custom libraries, configurations, or monitoring tools
+- **Version Control**: Tag and version your images for different environments (dev, staging, prod)
+
+**DigitalOcean Container Registry (DOCR) Advantages**:
+
+- **Geographic Proximity**: Faster image pulls from DigitalOcean data centers
+- **Integrated Billing**: Consolidated with your Droplet costs
+- **Private Registry**: Secure storage for proprietary configurations
+- **Team Collaboration**: Share images across team members and CI/CD pipelines
+
+**Build Time Investment**: The 20-30 minute build time includes:
+
+- **Rust Compilation**: Dynamo's high-performance components are written in Rust
+- **Python Dependencies**: Installing and optimizing ML libraries like PyTorch
+- **CUDA Integration**: Ensuring proper GPU support in the container
+
+**Production Readiness**: This step transforms the development code into a production-ready container that can be deployed consistently across environments.
+
+</details>
+
+**💡 Performance Optimization Tip**: For optimal performance, consider setting up your DigitalOcean Container Registry in the **NYC region** (same as your GPU Droplet location). This reduces image transfer time significantly during deployment and updates.
+
+**📚 Registry Setup Guide**: If you haven't set up DOCR yet, follow the comprehensive [DigitalOcean Private Docker Registry Tutorial](https://www.digitalocean.com/community/tutorial-collections/how-to-set-up-a-private-docker-registry) to create your registry in the NYC region.
+
+### Build and Push Process
 
 ```bash
 ./container/build.sh
@@ -197,7 +294,30 @@ docker push $DOCKER_REGISTRY/dynamo-base:v0.3.0-vllm
 
 ## Step 6: Start Dynamo Distributed Runtime Services
 
-> Why: Start Dynamo distributed runtime services to provide infrastructure support for subsequent inference services.
+<details>
+  <summary>🤔 Why This Step Matters</summary>
+  
+**Infrastructure Services**: The metrics Docker Compose stack provides essential infrastructure:
+
+- **Prometheus**: Collects and stores time-series metrics from Dynamo services
+- **Grafana**: Provides dashboards for visualizing performance metrics
+- **Service Discovery**: Enables automatic discovery of Dynamo service instances
+- **Health Monitoring**: Tracks service health and availability
+
+**Distributed Architecture Foundation**: These services enable:
+
+- **Multi-Service Coordination**: Required for Dynamo's disaggregated serving architecture
+- **Performance Monitoring**: Real-time visibility into throughput, latency, and resource usage
+- **Debugging Support**: Metrics help identify bottlenecks and performance issues
+- **Production Readiness**: Essential for operating Dynamo in production environments
+
+**Why Start Early**: Starting these services before Dynamo ensures:
+
+- **Service Registration**: Dynamo services can register themselves upon startup
+- **Immediate Monitoring**: Metrics collection begins as soon as Dynamo starts
+- **Dependency Resolution**: Avoids startup failures due to missing infrastructure services
+
+</details>
 
 ```bash
 docker compose -f deploy/metrics/docker-compose.yml up -d
@@ -205,7 +325,32 @@ docker compose -f deploy/metrics/docker-compose.yml up -d
 
 ## Step 7: Enter Container and Mount Workspace
 
-> Why: Developing inside containers avoids host environment pollution, ensuring dependency consistency.
+<details>
+  <summary>🤔 Why This Step Matters</summary>
+  
+**Development Environment Isolation**: Working inside containers provides several benefits:
+
+- **Consistent Environment**: Same runtime environment as production deployment
+- **Dependency Isolation**: Avoids conflicts with host system packages and libraries
+- **GPU Access**: Container has proper NVIDIA driver and CUDA toolkit access
+- **Reproducible Development**: Team members get identical development environments
+
+**Workspace Mounting Benefits**:
+
+- **Code Persistence**: Changes made inside container persist on the host filesystem
+- **Development Workflow**: Edit code with host tools, run inside container
+- **Build Artifacts**: Compiled binaries and build outputs are accessible from host
+- **Debugging**: Access to logs and debug information from both host and container
+
+**Why `dynamo:v0.3.0-vllm` Image**: This specific image includes:
+
+- **vLLM Integration**: Pre-configured with vLLM for high-performance inference
+- **CUDA Support**: Proper GPU drivers and CUDA toolkit
+- **Development Tools**: Rust compiler, Python environment, and debugging utilities
+
+**Container vs Host Development**: Container development ensures your local changes will work identically in production, eliminating "works on my machine" issues.
+
+</details>
 
 ```bash
 ./container/run.sh -it --mount-workspace --image dynamo:v0.3.0-vllm
@@ -215,7 +360,37 @@ docker compose -f deploy/metrics/docker-compose.yml up -d
 
 ## Step 8: Build Rust Components and Prepare Python Environment
 
-> Why: Build Rust project and install Python packages to prepare the complete Dynamo runtime environment.
+<details>
+  <summary>🤔 Why This Step Matters</summary>
+  
+**Rust Components Performance**: Dynamo's core components are written in Rust for maximum performance:
+
+- **Memory Safety**: Rust prevents memory leaks and buffer overflows common in C/C++
+- **Zero-Cost Abstractions**: High-level code compiles to efficient machine code
+- **Concurrency**: Rust's ownership model enables safe parallel processing
+- **Performance**: Rust performance rivals C/C++ while being safer and more maintainable
+
+**Critical Binaries Built**:
+
+- **`http`**: High-performance HTTP server for API endpoints
+- **`llmctl`**: Command-line tool for managing LLM services
+- **`dynamo-run`**: Main service orchestrator and runtime
+
+**Build Time Investment**: The 10-15 minute build time includes:
+
+- **Dependency Compilation**: Building all Rust dependencies from source
+- **Optimization**: Release builds include aggressive optimizations for performance
+- **Cross-Platform Compatibility**: Ensures binaries work with your specific GPU architecture
+
+**Python Environment Setup**: Installing Dynamo in editable mode (`-e .`) enables:
+
+- **Development Workflow**: Changes to Python code take effect immediately
+- **Custom Modifications**: Ability to modify and test Dynamo's Python components
+- **PYTHONPATH Configuration**: Ensures all modules can find each other correctly
+
+**Why This Step is Critical**: Without properly built Rust components, Dynamo cannot start or will have severely degraded performance.
+
+</details>
 
 ```bash
 # Build Rust components
@@ -237,7 +412,37 @@ export PYTHONPATH=$PYTHONPATH:/workspace/deploy/sdk/src:/workspace/components/pl
 
 ## Step 9: Start Dynamo Test Service
 
-> Why: Start service to validate LLM inference performance.
+<details>
+  <summary>🤔 Why This Step Matters</summary>
+  
+**Service Validation**: Starting the Dynamo service validates your entire deployment:
+
+- **Configuration Verification**: Ensures all configuration files are correct and compatible
+- **GPU Access**: Confirms containers can access GPU hardware properly
+- **Model Loading**: Tests ability to download and load the specified LLM model
+- **API Endpoint**: Establishes the HTTP API for receiving inference requests
+
+**Aggregated Router Architecture**: The `agg_router` configuration demonstrates:
+
+- **Request Routing**: Intelligent distribution of requests across available workers
+- **Load Balancing**: Automatic scaling based on request volume and GPU availability
+- **KV Cache Management**: Efficient memory usage through intelligent caching strategies
+- **Performance Optimization**: Disaggregated serving for maximum throughput
+
+**Model Download Process**: The DeepSeek-R1-Distill-Llama-8B model:
+
+- **Size**: Approximately 8GB download, requiring stable internet connection
+- **Caching**: Model is cached locally for subsequent runs
+- **Rate Limiting**: Hugging Face may rate-limit downloads (hence the 429 error handling)
+
+**Service Health Indicators**: A successful start shows:
+
+- **Port Binding**: Service listening on port 8000
+- **Model Loading**: Successful model initialization
+- **GPU Utilization**: GPU memory allocation for model weights
+- **API Readiness**: Ready to accept inference requests
+
+</details>
 
 ```bash
 cd examples/llm
@@ -250,7 +455,44 @@ dynamo serve graphs.agg_router:Frontend -f configs/agg_router.yaml
 
 ## Step 10: Send Test Request
 
-> Why: Actually send requests to verify service is working properly.
+<details>
+  <summary>🤔 Why This Step Matters</summary>
+  
+**End-to-End Validation**: This final test confirms your entire deployment works correctly:
+
+- **API Functionality**: Verifies the HTTP API accepts and processes requests
+- **Model Inference**: Confirms the LLM can generate coherent responses
+- **GPU Utilization**: Validates GPU is being used for inference computations
+- **Response Quality**: Ensures the model produces expected output format
+
+**Request Structure Analysis**:
+
+- **OpenAI Compatibility**: Uses OpenAI-compatible API format for easy integration
+- **Model Specification**: Explicitly specifies the loaded model
+- **Message Format**: Standard chat completion format with user/assistant roles
+- **Parameters**: `max_tokens` limits response length, `stream: false` gets complete response
+
+**Performance Indicators**: A successful response demonstrates:
+
+- **Latency**: Time from request to response (typically 2-5 seconds for first request)
+- **Throughput**: System's ability to process requests
+- **Quality**: Coherent, relevant response to the travel question
+- **Stability**: Service remains responsive after processing requests
+
+**Production Readiness**: This test confirms your deployment is ready for:
+
+- **Application Integration**: Can be integrated into web applications or services
+- **Load Testing**: Ready for performance benchmarking and optimization
+- **Scaling**: Foundation for multi-GPU or multi-node deployments
+
+**Troubleshooting Value**: If this test fails, it helps identify issues in:
+
+- **Network Configuration**: Port access and firewall settings
+- **Service Health**: Whether Dynamo is running correctly
+- **Model Loading**: Whether the LLM model loaded successfully
+- **GPU Access**: Whether inference is using GPU acceleration
+
+</details>
 
 ```bash
 curl localhost:8000/v1/chat/completions \
@@ -304,14 +546,9 @@ Now that you have successfully deployed NVIDIA Dynamo on a single GPU Droplet, t
 
 #### **Performance Benchmarking & Monitoring**
 
-Learn how to build a comprehensive monitoring dashboard that tracks critical NVIDIA Dynamo metrics and conduct systematic performance testing:
+In our next tutorial, you'll learn how to build a comprehensive monitoring dashboard and conduct systematic performance testing to optimize your NVIDIA Dynamo deployment. This includes understanding key metrics, identifying bottlenecks, and making data-driven scaling decisions.
 
-- **KV Cache Performance Analysis**: Monitor hit rates, block utilization, and memory efficiency to understand caching effectiveness
-- **Request Processing Metrics**: Track queue lengths, throughput patterns, and latency distribution under different loads
-- **Resource Utilization Monitoring**: Analyze GPU memory usage, compute utilization, and identify system bottlenecks
-- **Load Testing & Optimization**: Conduct systematic benchmarking to find optimal configurations and scaling limits
-
-Understanding these performance characteristics through proper monitoring and testing is essential for optimizing your Dynamo deployment and making informed decisions about scaling strategies.
+Stay tuned for the upcoming guide on **"Building Performance Monitoring Dashboards for NVIDIA Dynamo"**!
 
 ### Related Resources
 
