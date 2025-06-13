@@ -1,0 +1,609 @@
+---
+title: 'Build LLM Performance Testing Dashboard with KV Cache Monitoring on DigitalOcean'
+publishedAt: '2025-06-10'
+description: >-
+  Learn how to deploy a comprehensive LLM API scalability testing dashboard with real-time KV Cache monitoring. This tutorial covers Next.js dashboard setup, Prometheus metrics collection, Grafana visualization, and performance benchmarking for production LLM deployments.
+banner: 'llm-dashboard-banner'
+tags: 'llm, performance, monitoring, dashboard'
+---
+
+# Build LLM Performance Testing Dashboard with KV Cache Monitoring on DigitalOcean
+
+This tutorial will guide you through building a complete LLM API scalability testing dashboard with integrated Dynamo KV Cache monitoring system. Perfect for developers who want to establish efficient LLM performance monitoring and testing platforms in production environments.
+
+**⏱️ Estimated Deployment Time: 45-60 minutes**
+
+**📋 Prerequisites: This tutorial assumes you have completed the [NVIDIA Dynamo deployment tutorial](/blog/nvidia-dynamo-digitalocean-tutorial) and have a running Dynamo LLM service.**
+
+---
+
+## Overview
+
+This **LLM Performance Testing Dashboard** provides a comprehensive solution for monitoring and testing LLM API performance, featuring:
+
+1. **Real-time KV Cache Monitoring**  
+   Track cache hit rates, block utilization, and memory efficiency through Grafana dashboards.
+
+2. **Load Testing Interface**  
+   User-friendly Next.js dashboard for conducting systematic performance tests with diverse question sets.
+
+3. **Metrics Collection Pipeline**  
+   Complete monitoring stack with Prometheus, Grafana, and custom metrics aggregation.
+
+---
+
+## System Architecture
+
+```
+📦 Complete Architecture:
+Next.js Dashboard (Port 3050) → Load Testing Interface
+         ↓
+LLM API (Port 8000) → DeepSeek-R1-Distill-Llama-8B
+         ↓
+Dynamo KV Cache → Optimized Inference Performance
+         ↓
+Metrics Collection (Port 9091) → KV Cache Metrics Aggregation
+         ↓
+Prometheus (Port 9090) → Metrics Storage
+         ↓
+Grafana (Port 3000) → Visualization & Monitoring
+```
+
+---
+
+# Tutorial Steps
+
+## Step 1: Verify Dynamo Service Status
+
+> Why: Ensure the foundation LLM service is running properly before building the monitoring dashboard.
+
+```bash
+# Check Dynamo container status
+docker ps | grep dynamo
+
+# Verify LLM API health
+curl http://localhost:8000/health
+
+# Test basic inference
+curl localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": false,
+    "max_tokens": 50
+  }'
+```
+
+## Step 2: Set Up Metrics Collection Service
+
+> Why: The metrics aggregation service is the critical bridge between Dynamo KV Cache and Prometheus monitoring.
+
+```bash
+# Navigate to Dynamo workspace
+docker exec -it <dynamo_container_id> bash
+cd /workspace
+
+# Start metrics aggregation service (Critical Step)
+./target/release/metrics --component VllmWorker --endpoint load_metrics --host 0.0.0.0 --port 9091 &
+
+# Verify metrics endpoint
+curl http://localhost:9091/metrics | grep llm_kv
+```
+
+## Step 3: Deploy Monitoring Stack
+
+> Why: Set up Prometheus and Grafana for metrics collection and visualization.
+
+Create `docker-compose.monitoring.yml`:
+
+```yaml
+version: '3.8'
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    network_mode: 'host'
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+
+  grafana:
+    image: grafana/grafana:latest
+    network_mode: 'host'
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-storage:/var/lib/grafana
+
+volumes:
+  grafana-storage:
+```
+
+Create `prometheus.yml`:
+
+```yaml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'dynamo-metrics'
+    static_configs:
+      - targets: ['localhost:9091']
+    scrape_interval: 5s
+```
+
+```bash
+# Start monitoring stack
+docker compose -f docker-compose.monitoring.yml up -d
+
+# Verify services
+curl http://localhost:9090  # Prometheus
+curl http://localhost:3000  # Grafana (admin/admin)
+```
+
+## Step 4: Create Next.js Dashboard Project
+
+> Why: Build a user-friendly interface for conducting load tests and monitoring performance.
+
+```bash
+# Create new Next.js project
+npx create-next-app@latest llm-dashboard --typescript --tailwind --app-router
+cd llm-dashboard
+
+# Install additional dependencies
+npm install recharts lucide-react
+```
+
+## Step 5: Configure Dashboard Settings
+
+> Why: Centralized configuration management prevents hardcoded values and deployment issues.
+
+Create `src/config/dashboard-config.ts`:
+
+```typescript
+export const config = {
+  SERVER_IP: 'YOUR_DROPLET_IP', // Replace with your DigitalOcean Droplet IP
+  GRAFANA_PORT: 3000,
+  DASHBOARD_PORT: 3050,
+  LLM_API_PORT: 8000,
+  PROMETHEUS_PORT: 9090,
+  METRICS_PORT: 9091,
+};
+
+export const getGrafanaBaseUrl = () =>
+  `http://${config.SERVER_IP}:${config.GRAFANA_PORT}`;
+export const getLLMApiUrl = () =>
+  `http://${config.SERVER_IP}:${config.LLM_API_PORT}`;
+export const getPrometheusUrl = () =>
+  `http://${config.SERVER_IP}:${config.PROMETHEUS_PORT}`;
+```
+
+## Step 6: Build Dashboard Components
+
+> Why: Create intuitive UI components for load testing and real-time monitoring.
+
+Create `src/app/page.tsx`:
+
+```tsx
+'use client';
+
+import { useState, useEffect } from 'react';
+import { getGrafanaBaseUrl, getLLMApiUrl } from '../config/dashboard-config';
+
+export default function Dashboard() {
+  const [testMessage, setTestMessage] = useState(
+    'How to optimize LLM inference performance?'
+  );
+  const [useRandomQuestions, setUseRandomQuestions] = useState(false);
+  const [concurrentRequests, setConcurrentRequests] = useState(5);
+  const [testDuration, setTestDuration] = useState(60);
+  const [isRunning, setIsRunning] = useState(false);
+  const [results, setResults] = useState<any[]>([]);
+
+  const diverseQuestions = [
+    'Explain quantum computing in simple terms',
+    'Write a Python function to sort a list',
+    'What are the benefits of renewable energy?',
+    'How does machine learning work?',
+    'Describe the process of photosynthesis',
+  ];
+
+  const runLoadTest = async () => {
+    setIsRunning(true);
+    setResults([]);
+
+    const startTime = Date.now();
+    const endTime = startTime + testDuration * 1000;
+
+    while (Date.now() < endTime && isRunning) {
+      const promises = Array.from(
+        { length: concurrentRequests },
+        async (_, i) => {
+          const question = useRandomQuestions
+            ? diverseQuestions[
+                Math.floor(Math.random() * diverseQuestions.length)
+              ]
+            : testMessage;
+
+          const requestStart = Date.now();
+
+          try {
+            const response = await fetch(
+              `${getLLMApiUrl()}/v1/chat/completions`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  model: 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B',
+                  messages: [{ role: 'user', content: question }],
+                  stream: false,
+                  max_tokens: 100,
+                }),
+              }
+            );
+
+            const latency = Date.now() - requestStart;
+            const data = await response.json();
+
+            return {
+              timestamp: new Date().toISOString(),
+              latency,
+              success: response.ok,
+              question: question.substring(0, 50) + '...',
+              tokensGenerated: data.usage?.completion_tokens || 0,
+            };
+          } catch (error) {
+            return {
+              timestamp: new Date().toISOString(),
+              latency: Date.now() - requestStart,
+              success: false,
+              question: question.substring(0, 50) + '...',
+              error: error.message,
+            };
+          }
+        }
+      );
+
+      const batchResults = await Promise.all(promises);
+      setResults((prev) => [...prev, ...batchResults]);
+
+      // Wait 1 second before next batch
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+
+    setIsRunning(false);
+  };
+
+  const stopTest = () => {
+    setIsRunning(false);
+  };
+
+  return (
+    <div className='min-h-screen bg-gray-50 p-6'>
+      <div className='mx-auto max-w-7xl'>
+        <h1 className='mb-8 text-3xl font-bold text-gray-900'>
+          LLM Performance Testing Dashboard
+        </h1>
+
+        <div className='mb-8 grid grid-cols-1 gap-6 lg:grid-cols-2'>
+          {/* Test Configuration Panel */}
+          <div className='rounded-lg bg-white p-6 shadow-md'>
+            <h2 className='mb-4 text-xl font-semibold'>
+              Load Test Configuration
+            </h2>
+
+            <div className='space-y-4'>
+              <div>
+                <label className='flex items-center space-x-2'>
+                  <input
+                    type='checkbox'
+                    checked={useRandomQuestions}
+                    onChange={(e) => setUseRandomQuestions(e.target.checked)}
+                    className='rounded'
+                  />
+                  <span>Use Diverse Test Questions</span>
+                </label>
+              </div>
+
+              <div>
+                <label className='mb-2 block text-sm font-medium text-gray-700'>
+                  Custom Test Message
+                </label>
+                <textarea
+                  value={testMessage}
+                  onChange={(e) => setTestMessage(e.target.value)}
+                  disabled={useRandomQuestions}
+                  className={`w-full rounded-md border border-gray-300 p-3 ${
+                    useRandomQuestions
+                      ? 'cursor-not-allowed bg-gray-100 text-gray-500'
+                      : 'bg-white text-gray-900'
+                  }`}
+                  placeholder={
+                    useRandomQuestions
+                      ? 'Disabled when using diverse test questions'
+                      : 'Enter your test message...'
+                  }
+                  rows={3}
+                />
+              </div>
+
+              <div className='grid grid-cols-2 gap-4'>
+                <div>
+                  <label className='mb-2 block text-sm font-medium text-gray-700'>
+                    Concurrent Requests
+                  </label>
+                  <input
+                    type='number'
+                    value={concurrentRequests}
+                    onChange={(e) =>
+                      setConcurrentRequests(Number(e.target.value))
+                    }
+                    min='1'
+                    max='20'
+                    className='w-full rounded-md border border-gray-300 p-2'
+                  />
+                </div>
+
+                <div>
+                  <label className='mb-2 block text-sm font-medium text-gray-700'>
+                    Test Duration (seconds)
+                  </label>
+                  <input
+                    type='number'
+                    value={testDuration}
+                    onChange={(e) => setTestDuration(Number(e.target.value))}
+                    min='10'
+                    max='300'
+                    className='w-full rounded-md border border-gray-300 p-2'
+                  />
+                </div>
+              </div>
+
+              <div className='flex space-x-4'>
+                <button
+                  onClick={runLoadTest}
+                  disabled={isRunning}
+                  className='flex-1 rounded-md bg-blue-600 py-2 px-4 text-white hover:bg-blue-700 disabled:opacity-50'
+                >
+                  {isRunning ? 'Running Test...' : 'Start Load Test'}
+                </button>
+
+                {isRunning && (
+                  <button
+                    onClick={stopTest}
+                    className='flex-1 rounded-md bg-red-600 py-2 px-4 text-white hover:bg-red-700'
+                  >
+                    Stop Test
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Grafana Monitoring Panel */}
+          <div className='rounded-lg bg-white p-6 shadow-md'>
+            <h2 className='mb-4 text-xl font-semibold'>KV Cache Monitoring</h2>
+            <div className='flex aspect-video items-center justify-center rounded-md bg-gray-100'>
+              <iframe
+                src={`${getGrafanaBaseUrl()}/d/llm-performance/llm-performance-dashboard?orgId=1&refresh=5s&kiosk`}
+                width='100%'
+                height='100%'
+                frameBorder='0'
+                className='rounded-md'
+              />
+            </div>
+            <p className='mt-2 text-sm text-gray-600'>
+              Real-time KV Cache metrics and performance indicators
+            </p>
+          </div>
+        </div>
+
+        {/* Results Panel */}
+        {results.length > 0 && (
+          <div className='rounded-lg bg-white p-6 shadow-md'>
+            <h2 className='mb-4 text-xl font-semibold'>Test Results</h2>
+            <div className='mb-4 grid grid-cols-4 gap-4'>
+              <div className='text-center'>
+                <div className='text-2xl font-bold text-green-600'>
+                  {results.filter((r) => r.success).length}
+                </div>
+                <div className='text-sm text-gray-600'>Successful</div>
+              </div>
+              <div className='text-center'>
+                <div className='text-2xl font-bold text-red-600'>
+                  {results.filter((r) => !r.success).length}
+                </div>
+                <div className='text-sm text-gray-600'>Failed</div>
+              </div>
+              <div className='text-center'>
+                <div className='text-2xl font-bold text-blue-600'>
+                  {Math.round(
+                    results.reduce((sum, r) => sum + r.latency, 0) /
+                      results.length
+                  )}
+                  ms
+                </div>
+                <div className='text-sm text-gray-600'>Avg Latency</div>
+              </div>
+              <div className='text-center'>
+                <div className='text-2xl font-bold text-purple-600'>
+                  {Math.round(
+                    (results.filter((r) => r.success).length / results.length) *
+                      100
+                  )}
+                  %
+                </div>
+                <div className='text-sm text-gray-600'>Success Rate</div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+```
+
+## Step 7: Configure Grafana Dashboard
+
+> Why: Set up visual monitoring for KV Cache metrics and system performance.
+
+1. Access Grafana at `http://YOUR_DROPLET_IP:3000` (admin/admin)
+2. Add Prometheus data source: `http://localhost:9090`
+3. Import dashboard configuration:
+
+```json
+{
+  "dashboard": {
+    "title": "LLM Performance Dashboard",
+    "panels": [
+      {
+        "title": "KV Cache Hit Rate",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "llm_kv_hit_rate_percent"
+          }
+        ]
+      },
+      {
+        "title": "Active KV Blocks",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "llm_kv_blocks_active"
+          }
+        ]
+      },
+      {
+        "title": "Request Latency",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+## Step 8: Start Dashboard Application
+
+> Why: Launch the complete testing interface for conducting performance evaluations.
+
+```bash
+# Start Next.js dashboard
+npm run dev -- --port 3050
+
+# Verify dashboard access
+curl http://localhost:3050
+```
+
+## Step 9: Conduct Performance Testing
+
+> Why: Validate system performance under different load conditions and gather baseline metrics.
+
+1. **Access Dashboard**: Navigate to `http://YOUR_DROPLET_IP:3050`
+2. **Configure Test Parameters**:
+   - Concurrent Requests: Start with 5
+   - Test Duration: 60 seconds
+   - Enable "Use Diverse Test Questions" for realistic testing
+3. **Monitor Real-time Metrics**: Watch KV Cache performance in Grafana panel
+4. **Analyze Results**: Review success rates, latency distribution, and resource utilization
+
+## Step 10: Validate Monitoring Pipeline
+
+> Why: Ensure all components are working together and collecting accurate metrics.
+
+```bash
+# Check metrics collection
+curl http://localhost:9091/metrics | grep -E "(llm_kv|http_request)"
+
+# Verify Prometheus targets
+curl http://localhost:9090/api/v1/targets
+
+# Test Grafana API
+curl -u admin:admin http://localhost:3000/api/health
+```
+
+🎉 **Congratulations!** You've successfully deployed a comprehensive LLM Performance Testing Dashboard with real-time KV Cache monitoring. Your system is now ready for production-grade performance evaluation and optimization!
+
+---
+
+## Key Performance Metrics
+
+### KV Cache Monitoring
+
+| Metric                      | Description               | Optimal Range  |
+| --------------------------- | ------------------------- | -------------- |
+| `llm_kv_hit_rate_percent`   | Cache hit rate percentage | > 80%          |
+| `llm_kv_blocks_active`      | Active cache blocks       | < 70% of total |
+| `llm_requests_active_slots` | Active request slots      | < 80% of total |
+
+### Performance Benchmarks
+
+- **Low Load (< 30% KV utilization)**: Normal operation
+- **Medium Load (30-70% KV utilization)**: Monitor closely
+- **High Load (> 70% KV utilization)**: Consider optimization
+- **Cache Hit Rate > 80%**: Excellent performance
+- **Request Success Rate > 95%**: Production ready
+
+---
+
+## Common Issues and Solutions
+
+### Issue 1: Next.js Configuration Conflicts
+
+**Problem**: `config.ts` conflicts with Next.js page routing
+**Solution**: Rename to `dashboard-config.ts` and update imports
+
+### Issue 2: Missing KV Cache Metrics
+
+**Problem**: Grafana shows "No data" for KV metrics
+**Solution**: Ensure metrics aggregation service is running on port 9091
+
+### Issue 3: Docker Network Configuration
+
+**Problem**: `network_mode` and `networks` conflict in docker-compose
+**Solution**: Use only `network_mode: "host"` for monitoring services
+
+### Issue 4: UI Layout Inconsistency
+
+**Problem**: Elements disappear when toggling options
+**Solution**: Use `disabled` state instead of conditional rendering
+
+---
+
+## Next Steps
+
+With your LLM Performance Testing Dashboard operational, consider these advanced optimizations:
+
+#### **Advanced Performance Analysis**
+
+- **Multi-Model Comparison**: Test different LLM models side-by-side
+- **Scaling Analysis**: Evaluate performance across different concurrent loads
+- **Cost Optimization**: Analyze resource usage patterns for cost-effective scaling
+- **A/B Testing**: Compare different inference configurations and optimizations
+
+Understanding these performance characteristics through systematic testing will help you optimize your LLM deployment for production workloads and make informed scaling decisions.
+
+---
+
+## Conclusion
+
+You have successfully built a comprehensive LLM Performance Testing Dashboard that provides real-time monitoring and systematic testing capabilities. This platform enables you to:
+
+- Monitor KV Cache performance in real-time
+- Conduct systematic load testing with diverse scenarios
+- Analyze performance metrics and identify bottlenecks
+- Make data-driven decisions for scaling and optimization
+
+This foundation will support your journey toward production-ready LLM deployments with confidence in performance and reliability.
+
+**Happy testing and optimizing!**
