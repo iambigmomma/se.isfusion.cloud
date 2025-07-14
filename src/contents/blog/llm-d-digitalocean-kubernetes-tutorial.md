@@ -283,22 +283,31 @@ You should see a successful JSON response like:
 
 ```json
 {
-  "id": "cmpl-4cc80b2c-f6c8-4e86-9f31-500485a19ca9",
-  "object": "text_completion",
-  "created": 1751474325,
-  "model": "meta-llama/Llama-3.2-3B-Instruct",
   "choices": [
     {
+      "finish_reason": "length",
       "index": 0,
-      "text": "Kubernetes is like a smart orchestra conductor for containers. It helps manage and coordinate multiple applications running in containers across different computers or servers...",
       "logprobs": null,
-      "finish_reason": "length"
+      "message": {
+        "content": "Kubernetes (also known as K8s) is an open-source container orchestration system for automating the deployment, scaling, and management of containerized applications...",
+        "reasoning_content": null,
+        "role": "assistant",
+        "tool_calls": []
+      },
+      "stop_reason": null
     }
   ],
+  "created": 1752523066,
+  "id": "chatcmpl-76c2a86b-5460-4752-9f20-03c67ca5b0ba",
+  "kv_transfer_params": null,
+  "model": "meta-llama/Llama-3.2-3B-Instruct",
+  "object": "chat.completion",
+  "prompt_logprobs": null,
   "usage": {
-    "prompt_tokens": 8,
-    "total_tokens": 158,
-    "completion_tokens": 150
+    "completion_tokens": 150,
+    "prompt_tokens": 41,
+    "prompt_tokens_details": null,
+    "total_tokens": 191
   }
 }
 ```
