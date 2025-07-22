@@ -137,7 +137,7 @@ Our automated script will create a complete DOKS cluster with both CPU and GPU n
 
 ```bash
 # Run the automated cluster setup script
-./setup-gpu-cluster.sh
+./setup-gpu-cluster.sh -c
 ```
 
 The script will:
@@ -192,40 +192,49 @@ pool-gpu-yyyyy         Ready    <none>   3m    v1.31.1
 
 The script has intelligent state detection and will skip already completed steps, making it completely safe to re-run multiple times.
 
-## Step 3: Deploy llm-d with Monitoring
+## Step 3: Deploy llm-d Infrastructure
 
-Now let's deploy llm-d using our automated deployment script:
+Now let's deploy llm-d using our automated deployment scripts. This is a two-step process for better reliability and troubleshooting:
+
+### Step 3A: Deploy llm-d Core Components
+
+First, let's deploy the core llm-d inference services:
 
 ```bash
-# Deploy llm-d with your chosen GPU configuration and dashboard import
-./deploy-with-monitoring.sh -g rtx-6000-ada -t your_hf_token
-
-# Alternative: Deploy without dashboard import
-./deploy-with-monitoring.sh -g rtx-6000-ada -t your_hf_token -m
+# Deploy llm-d with your chosen GPU configuration
+./deploy-llm-d.sh -g rtx-6000-ada -t your_hf_token
 ```
 
-### What Gets Deployed
-
-The deployment script will install:
-
-**llm-d Core Components:**
+**What Gets Deployed:**
 
 - **Prefill Service**: Handles context processing on GPU pods
 - **Decode Service**: Manages token generation with GPU optimization
 - **Gateway Service**: Routes requests and manages load balancing
 - **Redis Service**: Provides KV cache storage
 
-**Smart Monitoring Integration:**
+### Step 3B: Setup Monitoring (Optional)
 
-- **Automatic Detection**: Checks if Prometheus/Grafana already exist
-- **No Duplicate Installation**: llm-d installer handles monitoring setup automatically
-- **Dashboard Import**: Imports llm-d Inference Gateway dashboard to existing Grafana
-- **ServiceMonitor Creation**: Automatic metrics collection setup
+After llm-d is running, optionally setup comprehensive monitoring:
+
+```bash
+# Navigate to monitoring directory
+cd monitoring
+
+# Setup Prometheus, Grafana, and llm-d dashboards
+./setup-monitoring.sh
+```
+
+**Monitoring Components:**
+
+- **Prometheus**: Metrics collection and storage
+- **Grafana**: Visualization dashboards and alerts
+- **llm-d Dashboard**: Custom inference performance dashboard
+- **ServiceMonitor**: Automatic llm-d metrics discovery
 
 ### Monitor Deployment Progress
 
 ```bash
-# Watch deployment progress
+# Watch llm-d deployment progress
 kubectl get pods -n llm-d -w
 
 # Check all components are running
@@ -240,6 +249,16 @@ meta-llama-llama-3-2-3b-instruct-decode-xxx   1/1     Running   0          3m
 meta-llama-llama-3-2-3b-instruct-prefill-xxx  1/1     Running   0          3m
 llm-d-inference-gateway-xxx                    1/1     Running   0          3m
 redis-xxx                                      1/1     Running   0          3m
+```
+
+### Monitor Setup Progress (If Step 3B was completed)
+
+```bash
+# Check monitoring stack status
+kubectl get pods -n llm-d-monitoring
+
+# Access Grafana dashboard
+kubectl port-forward -n llm-d-monitoring svc/prometheus-grafana 3000:80
 ```
 
 ## Step 4: Test Your llm-d Deployment
@@ -314,7 +333,7 @@ You should see a successful JSON response like:
 
 ## Step 5: Access Monitoring and Dashboard
 
-llm-d automatically sets up monitoring if needed. You can access the Grafana dashboard:
+If you completed Step 3B (monitoring setup), you can access the comprehensive monitoring dashboard:
 
 ```bash
 # Port-forward to Grafana
@@ -331,7 +350,7 @@ kubectl get secret prometheus-grafana -n llm-d-monitoring -o jsonpath="{.data.ad
 
 ### llm-d Dashboard and Key Metrics
 
-If you deployed with dashboard import (default), you'll find:
+After monitoring setup, you'll find:
 
 - **Dashboard Location**: Look for "llm-d" folder in Grafana
 - **Dashboard Name**: "llm-d Inference Gateway"
@@ -428,7 +447,7 @@ kubectl get svc -n llm-d
 
 ### Dashboard Not Appearing in Grafana
 
-**Symptoms**: llm-d dashboard not visible in Grafana after deployment
+**Symptoms**: llm-d dashboard not visible in Grafana after running monitoring setup
 **Solution**: Check dashboard ConfigMap and Grafana sidecar
 
 ```bash
@@ -438,8 +457,8 @@ kubectl get configmap llm-d-dashboard -n llm-d-monitoring
 # Check ConfigMap labels
 kubectl get configmap llm-d-dashboard -n llm-d-monitoring -o yaml | grep grafana_dashboard
 
-# If missing, re-run deployment with dashboard import
-./deploy-with-monitoring.sh -g rtx-6000-ada -t your_hf_token
+# If missing, re-run monitoring setup
+cd monitoring && ./setup-monitoring.sh
 ```
 
 ---
@@ -473,14 +492,17 @@ If you want to keep your DOKS cluster but remove llm-d components:
 cd /path/to/llm-d-deployer/quickstart/infra/doks-digitalocean
 
 # Remove llm-d components using the uninstall flag
-./deploy-with-monitoring.sh -u
+./deploy-llm-d.sh -u
+
+# Optionally remove monitoring (if installed)
+# kubectl delete namespace llm-d-monitoring
 ```
 
 This will:
 
 - Remove all llm-d pods and services
 - Delete the llm-d namespace
-- Remove monitoring components (if they were installed by llm-d)
+- Keep monitoring components (if installed separately)
 - Keep your DOKS cluster and GPU nodes intact for future use
 
 #### Option 2: Delete Entire Cluster
