@@ -1,5 +1,5 @@
 ---
-title: "Build AI Agents That Remember with DigitalOcean Gradient AI + GibsonAI/Memori"
+title: 'Build AI Agents That Remember with DigitalOcean Gradient AI + GibsonAI/Memori'
 publishedAt: '2025-11-21'
 description: 'Learn how to build and deploy a production-ready AI customer support agent with persistent conversation memory. This tutorial shows how memory reduces token usage by 40-60%, improves user experience, and increases retention using DigitalOcean Gradient AI and Memori SDK.'
 banner: 'persistent-ai-agent-memory-banner'
@@ -11,11 +11,13 @@ tags: 'ai,context-engineering,agentic'
 Customer support is expensive ($15-25 per ticket), and most AI chatbots forget conversations between sessions. This creates frustrated customers and wasted tokens.
 
 **The Problem:** Without memory, customers repeat context every session:
+
 - 40% higher token costs from repeating context
 - 3x more messages to resolve issues
 - Poor retention from frustrating experiences
 
 **This Tutorial:** Build a memory-powered AI support agent that:
+
 - ✅ Remembers conversations across days (40-60% token savings)
 - ✅ Improves resolution time by 50% with contextual awareness
 - ✅ Uses DigitalOcean Gradient AI + Memori SDK for persistent memory
@@ -33,27 +35,28 @@ Customer support is expensive ($15-25 per ticket), and most AI chatbots forget c
 
 With typical pricing of $0.002 per 1K tokens, memory reduces costs by 40-60%:
 
-| User Base | Annual Cost Without Memory | Annual Cost With Memory | Annual Savings |
-|-----------|---------------------------|------------------------|----------------|
-| 10K users | $1,920 | $1,152 | $768 |
-| 50K users | $9,600 | $5,760 | **$3,840** |
-| 100K users | $19,200 | $11,520 | **$7,680** |
-| 1M users | $192,000 | $115,200 | **$76,800** |
+| User Base  | Annual Cost Without Memory | Annual Cost With Memory | Annual Savings |
+| ---------- | -------------------------- | ----------------------- | -------------- |
+| 10K users  | $1,920                     | $1,152                  | $768           |
+| 50K users  | $9,600                     | $5,760                  | **$3,840**     |
+| 100K users | $19,200                    | $11,520                 | **$7,680**     |
+| 1M users   | $192,000                   | $115,200                | **$76,800**    |
 
-*Assumptions: 2 conversations/user/month, 10 message pairs per conversation*
+_Assumptions: 2 conversations/user/month, 10 message pairs per conversation_
 
 ### Key Performance Metrics
 
-| Metric | Without Memory | With Memory | Improvement |
-|--------|----------------|-------------|-------------|
-| Messages to Resolution | 12-15 | 5-7 | 50% fewer |
-| Customer Satisfaction | 3.2/5.0 | 4.5/5.0 | +40% |
-| Human Escalation Rate | 25% | 10% | 60% reduction |
-| First Contact Resolution | 42% | 68% | +62% |
+| Metric                   | Without Memory | With Memory | Improvement   |
+| ------------------------ | -------------- | ----------- | ------------- |
+| Messages to Resolution   | 12-15          | 5-7         | 50% fewer     |
+| Customer Satisfaction    | 3.2/5.0        | 4.5/5.0     | +40%          |
+| Human Escalation Rate    | 25%            | 10%         | 60% reduction |
+| First Contact Resolution | 42%            | 68%         | +62%          |
 
 ### Quick ROI Example
 
 For a 50K user deployment:
+
 - **Token savings:** ~$4K/year
 - **Escalation reduction:** ~$2.7M/year
 - **Retention improvement:** ~$750K/year
@@ -62,12 +65,14 @@ For a 50K user deployment:
 ### When to Use Memory-Powered Agents
 
 **✅ Good Use Cases:**
+
 - Customer service spanning days/weeks
 - Long-term relationships (banking, healthcare, education)
 - Personalization drives value (recommendations, upsells)
 - Users expect recognition (retail, hospitality)
 
 **❌ Avoid When:**
+
 - Privacy-sensitive scenarios (anonymous hotlines)
 - Short-lived, one-time interactions (FAQ lookups)
 - Regulatory constraints prevent data retention
@@ -110,6 +115,7 @@ By the end of this tutorial, you'll have a complete AI customer support system w
 ## Prerequisites
 
 **Required:**
+
 - [DigitalOcean account](https://cloud.digitalocean.com/login) with [Gradient AI access](https://www.digitalocean.com/products/gradientai/platform)
 - DigitalOcean API Token ([get here](https://cloud.digitalocean.com/account/api/tokens)) - format: `dop_v1_...`
 - DigitalOcean Project ID - format: `aaaaaaaa-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, can be found in the DigitalOcean Cloud Panel URL ([find here](https://cloud.digitalocean.com/projects))
@@ -118,6 +124,7 @@ By the end of this tutorial, you'll have a complete AI customer support system w
 - Git
 
 **Optional:**
+
 - PostgreSQL client (psql, pgAdmin, DBeaver)
 - Domain name (localhost works for testing)
 
@@ -209,9 +216,11 @@ docker-compose logs --tail=50 postgres
 Before registering your domain, it's important to understand how the three key components work together:
 
 ### The Three Services
+
 ![Multi-tenant AI agent architecture showing three services: GibsonAI authentication, DigitalOcean Gradient AI, and PostgreSQL database with their connections](https://res.cloudinary.com/iambigmomma/image/upload/v1763479367/blog/ai-agent-memory/multi-agent-ai-agent-architecture.png)
 
 **Architecture Diagram Explanation:**
+
 - **Top Layer:** External services (GibsonAI for authentication, DigitalOcean for AI processing)
 - **Bottom Layer:** Your local PostgreSQL database storing domain configurations and agent metadata
 - **Connections:** API Key Validation (GibsonAI ↔ PostgreSQL) and Agent Creation (DigitalOcean ↔ PostgreSQL)
@@ -219,11 +228,13 @@ Before registering your domain, it's important to understand how the three key c
 ### What Each Component Does
 
 1. **GibsonAI API Key** (`mk_...`)
+
    - Authentication service that validates you're a legitimate user
    - Required in the `Authorization: Bearer` header
    - Get yours at [memoriapp.gibsonai.com](https://memoriapp.gibsonai.com/)
 
 2. **DigitalOcean Gradient AI Agent** (`agent_uuid`)
+
    - The actual AI that processes conversations
    - Uses the model specified in your `.env` (e.g., Llama-3.2-3B-Instruct)
    - Deployed on DigitalOcean cloud infrastructure
@@ -236,13 +247,13 @@ Before registering your domain, it's important to understand how the three key c
 
 ### Database Tables Created
 
-| Table | Purpose |
-|-------|---------|
-| `registered_domains` | Maps domain names to GibsonAI API keys |
-| `agents` | Stores DigitalOcean agent details (UUID, URL, access keys) |
-| `knowledge_bases` | Tracks uploaded documents and their vector embeddings |
-| `user_sessions` | Manages active user chat sessions |
-| `conversation_history` | Stores all messages for memory retrieval |
+| Table                  | Purpose                                                    |
+| ---------------------- | ---------------------------------------------------------- |
+| `registered_domains`   | Maps domain names to GibsonAI API keys                     |
+| `agents`               | Stores DigitalOcean agent details (UUID, URL, access keys) |
+| `knowledge_bases`      | Tracks uploaded documents and their vector embeddings      |
+| `user_sessions`        | Manages active user chat sessions                          |
+| `conversation_history` | Stores all messages for memory retrieval                   |
 
 ---
 
@@ -318,7 +329,9 @@ Look for `"has_access_key": true` and a valid `agent_url` to confirm the agent i
 ## Step 4: Test the Chat API
 
 ### Testing Scenario
+
 In this test, we'll simulate a customer service interaction to demonstrate within-session memory:
+
 1. **First message:** Alice introduces herself and mentions order #12345
 2. **Follow-up:** Alice asks "When will it arrive?" without repeating her name or order number
 3. **Expected result:** AI remembers context from the first message and responds appropriately
@@ -407,7 +420,9 @@ Notice the AI remembered Alice's name and order number (#12345) from the previou
 **Why This Matters:** This test demonstrates the core value of persistent memory. When users return hours or days later, the AI remembers their previous conversations—no need to repeat context!
 
 ### Testing Scenario
+
 Simulating a returning customer (same user, different session):
+
 1. **Create new session** for Alice (same `user_id`)
 2. **Ask about order** without providing any context
 3. **Expected result:** AI remembers order #12345 from the previous session and responds with context
@@ -476,9 +491,10 @@ Add the widget to any website. Choose one of these methods:
 
 ```html
 <!-- Just add this single script tag -->
-<script src="http://localhost:8000/static/widget.js"
-        data-domain-id="YOUR_DOMAIN_ID_HERE">
-</script>
+<script
+  src="http://localhost:8000/static/widget.js"
+  data-domain-id="YOUR_DOMAIN_ID_HERE"
+></script>
 ```
 
 The widget automatically uses the script's origin as the API URL.
@@ -488,44 +504,44 @@ The widget automatically uses the script's origin as the API URL.
 ```html
 <script src="http://localhost:8000/static/widget.js"></script>
 <script>
-    CustomerSupportWidget.init({
-        apiUrl: 'http://localhost:8000',
-        domainId: 'YOUR_DOMAIN_ID_HERE',  // From Step 3
-        position: 'bottom-right',
-        primaryColor: '#0066cc',
-        welcomeMessage: 'Hi! How can I help you today?'
-    });
+  CustomerSupportWidget.init({
+    apiUrl: 'http://localhost:8000',
+    domainId: 'YOUR_DOMAIN_ID_HERE', // From Step 3
+    position: 'bottom-right',
+    primaryColor: '#0066cc',
+    welcomeMessage: 'Hi! How can I help you today?',
+  });
 </script>
 ```
 
 <details>
 <summary><strong>Widget Configuration Options (click to expand)</strong></summary>
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `apiUrl` | string | required | Your backend API URL |
-| `domainId` | string | required | Domain ID from Step 3 (UUID format) |
-| `position` | string | `'bottom-right'` | Widget position: `'bottom-right'`, `'bottom-left'` |
-| `primaryColor` | string | `'#007bff'` | Brand color for buttons and header |
-| `welcomeMessage` | string | `'Hi! How can I help you today?'` | Initial greeting message |
-| `placeholder` | string | `'Type your message...'` | Input field placeholder |
-| `widgetTitle` | string | `'Customer Support'` | Widget header title |
-| `autoScrape` | boolean | `true` | Automatically scrape website for knowledge |
+| Option           | Type    | Default                           | Description                                        |
+| ---------------- | ------- | --------------------------------- | -------------------------------------------------- |
+| `apiUrl`         | string  | required                          | Your backend API URL                               |
+| `domainId`       | string  | required                          | Domain ID from Step 3 (UUID format)                |
+| `position`       | string  | `'bottom-right'`                  | Widget position: `'bottom-right'`, `'bottom-left'` |
+| `primaryColor`   | string  | `'#007bff'`                       | Brand color for buttons and header                 |
+| `welcomeMessage` | string  | `'Hi! How can I help you today?'` | Initial greeting message                           |
+| `placeholder`    | string  | `'Type your message...'`          | Input field placeholder                            |
+| `widgetTitle`    | string  | `'Customer Support'`              | Widget header title                                |
+| `autoScrape`     | boolean | `true`                            | Automatically scrape website for knowledge         |
 
 Example with full customization:
 
 ```html
 <script>
-    CustomerSupportWidget.init({
-        apiUrl: 'https://your-api.com',
-        domainId: '1c6b2b83-xxxx-xxxx-xxxx-xxxxxxxxxxxx',  // Your domain ID from Step 3
-        position: 'bottom-left',
-        primaryColor: '#FF5722',
-        welcomeMessage: 'Welcome back! How can we help today?',
-        placeholder: 'Ask me anything...',
-        widgetTitle: 'Customer Support',
-        autoScrape: false
-    });
+  CustomerSupportWidget.init({
+    apiUrl: 'https://your-api.com',
+    domainId: '1c6b2b83-xxxx-xxxx-xxxx-xxxxxxxxxxxx', // Your domain ID from Step 3
+    position: 'bottom-left',
+    primaryColor: '#FF5722',
+    welcomeMessage: 'Welcome back! How can we help today?',
+    placeholder: 'Ask me anything...',
+    widgetTitle: 'Customer Support',
+    autoScrape: false,
+  });
 </script>
 ```
 
@@ -538,6 +554,7 @@ Visit the demo page to see the widget in action:
 **Product Demo:** http://localhost:8000/static/product_demo.html
 
 The widget automatically handles:
+
 - Session management (persisted in localStorage)
 - Conversation memory across page reloads
 - Persistent memory for returning users (via user_id)
@@ -550,6 +567,7 @@ The widget automatically handles:
 ## Step 7: Upload Knowledge Base (Optional)
 
 **When to Use This:**
+
 - You have product documentation, FAQs, or policy documents
 - You want the AI to answer questions about specific company information
 - You need grounded, accurate responses based on your documentation
@@ -637,6 +655,7 @@ Anywhere relationship continuity matters, memory creates measurable value.
 **Symptoms:** Widget or API returns "Failed to send message: 500" error
 
 **Common Causes:**
+
 - DigitalOcean agent access key is invalid or expired
 - Agent not fully deployed yet
 - Agent experiencing temporary issues
@@ -718,6 +737,7 @@ After restarting, wait 10-20 seconds and try your request again.
 **Symptoms:** AI doesn't remember previous conversations when user returns
 
 **Common Causes:**
+
 - `user_id` not provided in requests
 - Different `user_id` used across sessions
 - Memori API key not configured
@@ -740,6 +760,7 @@ curl -X POST http://localhost:8000/ask \
 ```
 
 **Check your Memori API key:**
+
 ```bash
 # Verify MEMORI_API_KEY is set in .env
 grep MEMORI_API_KEY .env
@@ -775,6 +796,7 @@ If the issue persists, the agent may have failed to deploy. Check your DigitalOc
 **Symptoms:** Widget doesn't appear on the webpage
 
 **Common Causes:**
+
 - Incorrect `domainId` in widget configuration
 - API not accessible from browser
 - CORS issues
@@ -787,9 +809,9 @@ console.log('Domain ID:', 'YOUR_DOMAIN_ID_HERE');
 
 // 2. Check if API is accessible
 fetch('http://localhost:8000/health')
-  .then(r => r.json())
-  .then(d => console.log('API Health:', d))
-  .catch(e => console.error('API Error:', e));
+  .then((r) => r.json())
+  .then((d) => console.log('API Health:', d))
+  .catch((e) => console.error('API Error:', e));
 
 // 3. Check browser console for errors
 // Press F12 → Console tab
@@ -836,19 +858,23 @@ This agent + memory pattern works for healthcare, finance, education, travel, re
 ### Next Steps
 
 1. **Add domain-specific knowledge**
+
    - Upload your FAQ documents, product manuals, policies
    - Train the agent on your specific use cases
 
 2. **Customize the conversation flow**
+
    - Modify system prompts in the backend
    - Add business logic for escalation triggers
 
 3. **Monitor and optimize**
+
    - Track token usage and costs
    - Analyze conversation patterns for improvements
    - A/B test different greeting messages
 
 4. **Scale for production**
+
    - Deploy to cloud infrastructure
    - Set up monitoring and alerting
    - Implement rate limiting and security measures
@@ -863,4 +889,3 @@ This agent + memory pattern works for healthcare, finance, education, travel, re
 **Source code:** [github.com/Boburmirzo/customer-support-agent-memory](https://github.com/Boburmirzo/customer-support-agent-memory)
 
 **Platform:** [DigitalOcean Gradient AI](https://www.digitalocean.com/products/gradientai/platform)
-

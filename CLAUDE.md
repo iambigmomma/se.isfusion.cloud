@@ -72,12 +72,14 @@ To enable features locally, change `isProd` to `true` for the specific flag, but
 ### Page Structure
 
 Next.js pages follow standard routing in `src/pages/`:
+
 - Dynamic routes: `blog/[slug].tsx`, `library/[slug].tsx`, `projects/[slug].tsx`
 - API routes in `pages/api/` handle server-side operations (Spotify, content metadata, likes, newsletter)
 
 ### Component Organization
 
 Components are organized by purpose in `src/components/`:
+
 - `buttons/`: Interactive button components
 - `content/`: Blog-specific components (MDX components, comment section, table of contents)
 - `form/`: Form elements and inputs
@@ -99,6 +101,7 @@ Images are hosted on Cloudinary. The site uses lazy loading with blur placeholde
 ### Import Sorting Convention
 
 ESLint enforces strict import ordering via `simple-import-sort`:
+
 1. External libraries & side effects
 2. CSS files
 3. `@/lib` and `@/hooks`
@@ -119,6 +122,7 @@ The site is configured for Vercel deployment (`vercel.json`). Post-build, `next-
 ## Cross-Posting Workflow
 
 The `scripts/cross-post.js` script converts MDX blog posts for external platforms:
+
 - Transforms custom React components (CloudinaryImg, GithubCard, LiteYouTubeEmbed, TweetCard) into platform-specific syntax
 - Appends platform-specific footers with links back to the main site
 - Downloads OG images for social sharing
@@ -126,6 +130,7 @@ The `scripts/cross-post.js` script converts MDX blog posts for external platform
 ## Environment Variables
 
 Required variables are documented in `.env.example`:
+
 - `FAUNA_SECRET`: FaunaDB database access
 - `IP_ADDRESS_SALT`: For hashing user sessions
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REFRESH_TOKEN`: Spotify API integration
