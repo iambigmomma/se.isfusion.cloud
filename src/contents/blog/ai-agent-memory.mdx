@@ -135,7 +135,7 @@ This architecture supports strong security, efficient cost management, and easy 
 
 ### How Memory Works
 
-![AI agent conversation flow diagram showing 5 steps: user input, memory retrieval, knowledge base query, AI generation, and memory storage](hhttps://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Kafka-schema-registry/ai-agent-memory-conversation-flow-with-memory.png)
+![AI agent conversation flow diagram showing 5 steps: user input, memory retrieval, knowledge base query, AI generation, and memory storage](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Kafka-schema-registry/ai-agent-memory-conversation-flow-with-memory.png)
 
 **Key Benefit:** Instead of sending entire conversation history (expensive), Memori sends compressed summaries (cheap). For example: "User Alice, order #12345, inquired about delivery" instead of 20 message exchanges. This conversation memory approach is what makes customer support AI agents cost-effective at scale.
 
@@ -183,9 +183,7 @@ POSTGRES_PASSWORD=do_user_password
 DATABASE_URL=postgresql+psycopg://do_user:do_user_password@localhost:5432/customer_support
 ```
 
-<$>[note]
 **Note:** The default AI model is Llama-3.2-3B-Instruct (fast, cost-effective). You can find other model IDs in your [DigitalOcean Gradient AI Console](https://cloud.digitalocean.com/gradient-ai/models). For more on building AI agents, see our tutorial on [building an AI agent or chatbot with Gradient Platform](https://www.digitalocean.com/community/tutorials/build-ai-agent-chatbot-with-gradient-platform).
-<$>
 
 ## Step 2: Start Services with Docker Compose
 

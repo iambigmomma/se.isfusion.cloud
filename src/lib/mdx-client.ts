@@ -38,7 +38,10 @@ export function sortByTitle<T extends Array<Frontmatter>>(contents: T): T {
  */
 export function getTags<T extends Array<FrontmatterWithTags>>(contents: T) {
   const tags = contents.reduce(
-    (accTags: string[], content) => [...accTags, ...content.tags.split(',')],
+    (accTags: string[], content) => [
+      ...accTags,
+      ...(content.tags ? content.tags.split(',') : []),
+    ],
     []
   );
 

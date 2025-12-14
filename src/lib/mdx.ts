@@ -95,9 +95,12 @@ export async function getRecommendations(currSlug: string) {
     .sort(() => Math.random() - 0.5);
 
   // Find with similar tags
-  const recommendations = otherFms.filter((op) =>
-    op.tags.split(',').some((p) => currentFm?.tags.split(',').includes(p))
-  );
+  const recommendations = otherFms.filter((op) => {
+    if (!op.tags || !currentFm?.tags) return false;
+    return op.tags
+      .split(',')
+      .some((p) => currentFm.tags.split(',').includes(p));
+  });
 
   // Populate with random recommendations if not enough
   const threeRecommendations =

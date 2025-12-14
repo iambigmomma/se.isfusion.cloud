@@ -10,6 +10,13 @@ export async function getRssXml() {
 
   const itemXml = frontmatters
     .filter((fm) => !fm.slug.startsWith('id-'))
+    .filter((fm) => {
+      // Filter out posts with invalid dates
+      const dateStr = fm.lastUpdated ?? fm.publishedAt;
+      if (!dateStr) return false;
+      const date = new Date(dateStr);
+      return !isNaN(date.getTime());
+    })
     .map(({ slug, title, description, publishedAt, lastUpdated }) =>
       `
     <item>
