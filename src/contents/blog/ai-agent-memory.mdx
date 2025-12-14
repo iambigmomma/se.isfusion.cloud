@@ -8,26 +8,57 @@ tags: 'ai,context-engineering,agentic'
 
 ### Introduction
 
-Customer support is expensive ($15-25 per ticket), and most AI chatbots forget conversations between sessions. This creates frustrated customers and wasted tokens.
+Most AI-powered customer support chatbots struggle to remember conversations across sessions, forcing users to repeat themselves and driving up support costs, [often $15–25 per ticket](https://agentiveaiq.com/blog/how-much-does-an-ai-chatbot-cost-per-month). This results in repeated context, up to 40% higher token usage, three times more messages needed to resolve an issue, and overall frustration for users. Continuity is key: without memory, customer experiences are less efficient and satisfaction drops.
 
-**The Problem:** Without memory, customers repeat context every session:
+In this tutorial, you’ll learn how to build a customer support AI agent with persistent conversation memory—powered by [DigitalOcean Gradient™ AI](https://www.digitalocean.com/products/gradient) and the [Memori SDK](https://github.com/MemoriLabs/Memori). By remembering context across days or weeks, your agent reduces token costs by 40–60% and resolves issues in half the number of messages. We'll show you how to deploy this memory-powered agent using [FastAPI](https://www.digitalocean.com/community/tutorials/use-fastapi-with-relationaldb-ubuntu), [PostgreSQL](https://www.digitalocean.com/community/tutorials/how-to-install-and-use-postgresql-on-ubuntu-20-04), and an [embeddable JavaScript widget](https://www.digitalocean.com/community/tags/javascript), making integration into your stack seamless.
 
-- 40% higher token costs from repeating context
-- 3x more messages to resolve issues
-- Poor retention from frustrating experiences
+The whole process takes about 25–30 minutes, is suitable for intermediate users, and runs around $10–20 per month. You can find the full source code [on GitHub](https://github.com/MemoriLabs/memori-cookbook/tree/main/customer_support_agent_memory).
 
-**This Tutorial:** Build a memory-powered AI support agent that:
+## Key Takeaways
 
-- ✅ Remembers conversations across days (40-60% token savings)
-- ✅ Improves resolution time by 50% with contextual awareness
-- ✅ Uses DigitalOcean Gradient AI + [Memori Python SDK](https://github.com/MemoriLabs/Memori) (open source) for persistent memory
-- ✅ Deploys with FastAPI + PostgreSQL + embeddable JavaScript widget
+Before diving into the implementation, here's what you'll learn:
 
-**Time:** 25-30 minutes | **Cost:** ~$10-20/month | **Level:** Intermediate
+- **Conversation memory reduces token costs by 40-60%** by compressing conversation history into summaries instead of sending full message exchanges.
+- **Persistent memory improves customer support AI performance** by 40% satisfaction increase and 50% faster resolution time through contextual awareness.
+- **Multi-tenant architecture** enables per-domain isolation for privacy and GDPR compliance, making this suitable for SaaS deployments.
+- **DigitalOcean Gradient AI** provides the infrastructure for deploying AI agents with conversation memory, while [Memori SDK](https://github.com/MemoriLabs/Memori) handles intelligent memory compression.
+- **Production-ready stack** combines FastAPI, PostgreSQL, Docker, and an embeddable JavaScript widget for easy integration.
+- **Cross-session conversation memory** allows customer support AI agents to remember conversations across days or weeks, eliminating the need for users to repeat context.
 
-**Source code:** [https://github.com/Boburmirzo/customer-support-agent-memory](https://github.com/Boburmirzo/customer-support-agent-memory)
+## What You'll Build
 
----
+By the end of this tutorial, you'll have a complete AI customer support system with:
+
+1. **FastAPI Backend** - REST API with [PostgreSQL database](https://www.digitalocean.com/community/tags/postgresql) for multi-tenant support
+2. **AI Agents on DigitalOcean** - Deployed [Gradient AI agents](https://www.digitalocean.com/products/gradient) using the [Gradient™ AI Platform](https://www.digitalocean.com/products/gradientai/platform) (Llama-3.2-3B-Instruct model)
+3. **Persistent Memory** - Memori SDK integration that remembers conversations across sessions
+4. **Embeddable Widget** - JavaScript widget you can add to any website with one line of code
+5. **Optional Knowledge Base** - Upload PDFs, documents, and URLs for domain-specific answers
+
+**Architecture:** A multi-tenant SaaS-ready system with per-domain isolation, ensuring privacy and GDPR compliance.
+
+### Demo Video: See the AI Agent Memory in Action
+
+Here's a quick demo of the customer support AI agent with persistent memory. Watch the video below to see how it remembers user conversations across sessions and resolves support requests efficiently:
+
+[![Watch Demo](https://drive.google.com/thumbnail?id=1eTPQbNnz69FtzEahzLCG2t7m-NNGBpsL&s=1000)](https://drive.google.com/file/d/1eTPQbNnz69FtzEahzLCG2t7m-NNGBpsL/view?usp=sharing&s=1000)
+
+**Tip:** If the preview above doesn't load, [click here to watch the demo on Google Drive.](https://drive.google.com/file/d/1eTPQbNnz69FtzEahzLCG2t7m-NNGBpsL/view?usp=sharing)
+
+## Prerequisites
+
+**Required:**
+
+- [DigitalOcean account](https://cloud.digitalocean.com/login) with [Gradient AI access](https://www.digitalocean.com/products/gradientai/platform). If you're new to Gradient, see our [Getting Started with the Gradient Platform](https://www.digitalocean.com/community/tutorials/getting-started-with-digitalocean-gradient-platform) tutorial
+- DigitalOcean API Token ([get here](https://cloud.digitalocean.com/account/api/tokens)) - format: `dop_v1_...`
+- DigitalOcean Project ID - format: `aaaaaaaa-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, can be found in the DigitalOcean Cloud Panel URL ([find here](https://cloud.digitalocean.com/projects))
+- [Docker](https://www.digitalocean.com/community/tags/docker) & Docker Compose v2.0+
+- Git
+
+**Optional:**
+
+- [PostgreSQL client](https://www.digitalocean.com/community/tags/postgresql) (psql, pgAdmin, DBeaver)
+- Domain name (localhost works for testing)
 
 ## Why Memory Matters: The Numbers
 
@@ -42,7 +73,7 @@ With typical pricing of $0.002 per 1K tokens, memory reduces costs by 40-60%:
 | 100K users | $19,200                    | $11,520                 | **$7,680**     |
 | 1M users   | $192,000                   | $115,200                | **$76,800**    |
 
-_Assumptions: 2 conversations/user/month, 10 message pairs per conversation_
+**Assumptions:** 2 conversations/user/month, 10 message pairs per conversation.
 
 ### Key Performance Metrics
 
@@ -64,23 +95,21 @@ For a 50K user deployment:
 
 ### When to Use Memory-Powered Agents
 
-**✅ Good Use Cases:**
+**Good Use Cases for Memory-Powered Agents:**
 
 - Customer service spanning days/weeks
 - Long-term relationships (banking, healthcare, education)
 - Personalization drives value (recommendations, upsells)
 - Users expect recognition (retail, hospitality)
 
-**❌ Avoid When:**
+**Avoid These Use Cases:**
 
 - Privacy-sensitive scenarios (anonymous hotlines)
 - Short-lived, one-time interactions (FAQ lookups)
 - Regulatory constraints prevent data retention
 - Memory doesn't add value (static information queries)
 
-![When to use memory-powered AI agents - comparison of good use cases vs scenarios to avoid](https://res.cloudinary.com/iambigmomma/image/upload/v1763474319/blog/ai-agent-memory/memory-powered-agent.png)
-
----
+![When to use memory-powered AI agents - comparison of good use cases vs scenarios to avoid](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Kafka-schema-registry/memory-powered-agent.png)
 
 ## Architecture Overview
 
@@ -90,53 +119,46 @@ For a 50K user deployment:
 
 **Per-Domain Isolation:** Each domain gets isolated memory space for privacy and GDPR compliance.
 
+**How Data Flows:**  
+When an end user interacts with your website, their messages pass through several layers:
+
+1. **User** inputs a message in the widget embedded on your site.
+2. The **Widget** serves as a bridge, sending data securely to your backend server.
+3. The **Backend** (FastAPI) retrieves any relevant conversation memory (via the Memori SDK) and queries the knowledge base to add extra context if needed.
+4. The request is sent to the **AI agent** (running on DigitalOcean Gradient AI), which generates a response based on both the live input and retrieved memory/context.
+5. The **Backend** stores the new memory and delivers the response back through the widget, presenting it to the user.
+
+**Per-Domain Isolation:**  
+To ensure strong privacy and compliance (such as GDPR), each customer domain (company, organization, or project) is given an isolated memory space. This means conversation histories and knowledge bases are never shared between tenants, so users only receive responses based on their own organization's data and previous conversations.
+
+This architecture supports strong security, efficient cost management, and easy scalability as your user base grows.
+
 ### How Memory Works
 
-![AI agent conversation flow diagram showing 5 steps: user input, memory retrieval, knowledge base query, AI generation, and memory storage](https://res.cloudinary.com/iambigmomma/image/upload/v1763478267/blog/ai-agent-memory/ai-agent-memory-conversation-flow-with-memory.png)
+![AI agent conversation flow diagram showing 5 steps: user input, memory retrieval, knowledge base query, AI generation, and memory storage](hhttps://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Kafka-schema-registry/ai-agent-memory-conversation-flow-with-memory.png)
 
-**Key Benefit:** Instead of sending entire conversation history (expensive), Memori sends compressed summaries (cheap). Example: "User Alice, order #12345, inquired about delivery" instead of 20 message exchanges.
+**Key Benefit:** Instead of sending entire conversation history (expensive), Memori sends compressed summaries (cheap). For example: "User Alice, order #12345, inquired about delivery" instead of 20 message exchanges. This conversation memory approach is what makes customer support AI agents cost-effective at scale.
 
----
+## Step 1: Clone the Repository and Set Up Your Local Environment
 
-## What You'll Build
+To begin, you'll need a local copy of the project and a configuration file for your environment variables.
 
-By the end of this tutorial, you'll have a complete AI customer support system with:
+1. **Clone the repository:**  
+   This downloads the full project code to your local machine.
 
-1. **FastAPI Backend** - REST API with PostgreSQL database for multi-tenant support
-2. **AI Agents on DigitalOcean** - Deployed Gradient AI agents (Llama-3.2-3B-Instruct model)
-3. **Persistent Memory** - [Memori Python SDK ](https://github.com/MemoriLabs/Memori)integration that remembers conversations across sessions
-4. **Embeddable Widget** - JavaScript widget you can add to any website with one line of code
-5. **Optional Knowledge Base** - Upload PDFs, documents, and URLs for domain-specific answers
+   ```bash
+   git clone https://github.com/Boburmirzo/customer-support-agent-memory.git
+   cd customer-support-agent-memory
+   ```
 
-**Architecture:** Multi-tenant SaaS-ready system with per-domain isolation, ensuring privacy and GDPR compliance.
+2. **Create your environment config:**  
+   Copy the sample environment file to `.env`. This file holds sensitive details like your API keys and database credentials, which you’ll customize in the next step.
 
----
+   ```bash
+   cp .env.example .env
+   ```
 
-## Prerequisites
-
-**Required:**
-
-- [DigitalOcean account](https://cloud.digitalocean.com/login) with [Gradient AI access](https://www.digitalocean.com/products/gradientai/platform)
-- DigitalOcean API Token ([get here](https://cloud.digitalocean.com/account/api/tokens)) - format: `dop_v1_...`
-- DigitalOcean Project ID - format: `aaaaaaaa-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, can be found in the DigitalOcean Cloud Panel URL ([find here](https://cloud.digitalocean.com/projects))
-- Docker & Docker Compose v2.0+
-- Git
-
-**Optional:**
-
-- PostgreSQL client (psql, pgAdmin, DBeaver)
-- Domain name (localhost works for testing)
-
----
-
-## Step 1: Clone Repository and Setup Environment
-
-```bash
-git clone https://github.com/Boburmirzo/customer-support-agent-memory.git
-cd customer-support-agent-memory
-cp .env.example .env
-
-```
+Now you’re ready to configure your credentials and continue with the setup.
 
 ### Configure Environment Variables
 
@@ -159,18 +181,18 @@ POSTGRES_DB=customer_support
 POSTGRES_USER=do_user
 POSTGRES_PASSWORD=do_user_password
 DATABASE_URL=postgresql+psycopg://do_user:do_user_password@localhost:5432/customer_support
-
 ```
 
-**Note:** The default AI model is Llama-3.2-3B-Instruct (fast, cost-effective). You can find other model IDs in your [DigitalOcean Gradient AI Console](https://cloud.digitalocean.com/gradient-ai/models).
-
----
+<$>[note]
+**Note:** The default AI model is Llama-3.2-3B-Instruct (fast, cost-effective). You can find other model IDs in your [DigitalOcean Gradient AI Console](https://cloud.digitalocean.com/gradient-ai/models). For more on building AI agents, see our tutorial on [building an AI agent or chatbot with Gradient Platform](https://www.digitalocean.com/community/tutorials/build-ai-agent-chatbot-with-gradient-platform).
+<$>
 
 ## Step 2: Start Services with Docker Compose
 
+This tutorial uses [Docker Compose](https://www.digitalocean.com/community/tutorials/how-to-install-and-use-docker-compose-on-ubuntu-20-04) to orchestrate the FastAPI backend and PostgreSQL database services.
+
 ```bash
 docker-compose up -d --build
-
 ```
 
 Wait 30 seconds for containers to initialize, then verify:
@@ -186,26 +208,20 @@ docker-compose ps
 
 # Test API health
 curl http://localhost:8000/health | jq
-
 ```
 
-Both containers should show `Up` status. API documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs)
+Both containers should show `Up` status. API documentation is available at `http://localhost:8000/docs`
 
-- **Troubleshooting (click to expand)**
+```bash
+# Check logs if something fails
+docker-compose logs --tail=50 api
+docker-compose logs --tail=50 postgres
 
-  ```bash
-  # Check logs if something fails
-  docker-compose logs --tail=50 api
-  docker-compose logs --tail=50 postgres
-
-  # Common issues:
-  # - Missing .env variables
-  # - Port 8000 or 5432 already in use
-  # - Database not ready: wait longer and retry
-
-  ```
-
----
+# Common issues:
+# - Missing .env variables
+# - Port 8000 or 5432 already in use
+# - Database not ready: wait longer and retry
+```
 
 ## Understanding the Multi-Tenant Architecture
 
@@ -213,7 +229,7 @@ Before registering your domain, it's important to understand how the three key c
 
 ### The Three Services
 
-![Multi-tenant AI agent architecture showing services: DigitalOcean Gradient AI and PostgreSQL database with their connections](https://res.cloudinary.com/iambigmomma/image/upload/v1763479367/blog/ai-agent-memory/multi-agent-ai-agent-architecture.png)
+![Multi-tenant AI agent architecture showing three services: GibsonAI authentication, DigitalOcean Gradient AI, and PostgreSQL database with their connections](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Kafka-schema-registry/multi-agent-ai-agent-architecture.png)
 
 **Architecture Diagram Explanation:**
 
@@ -247,8 +263,6 @@ Before registering your domain, it's important to understand how the three key c
 | `user_sessions`        | Manages active user chat sessions                          |
 | `conversation_history` | Stores all messages for memory retrieval                   |
 
----
-
 ## Step 3: Register Your Domain
 
 Register your domain to get a unique domain ID for API requests.
@@ -273,11 +287,10 @@ Expected response:
 }
 ```
 
-**⚠️ IMPORTANT: Save the `domain_id`** - you'll need it for ALL subsequent API requests:
+**Important:** Save the `domain_id` as you'll need it for all subsequent API requests.
 
 ```bash
 export DOMAIN_ID="1c6b2b83-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # Use your actual domain_id
-
 ```
 
 This ID is used in the `X-Domain-ID` header for session and chat endpoints.
@@ -286,7 +299,6 @@ Wait 60-120 seconds for the agent to deploy, then check status:
 
 ```bash
 curl -X GET "http://localhost:8000/agents" | jq
-
 ```
 
 Expected response when ready:
@@ -310,11 +322,9 @@ Expected response when ready:
 
 Look for `"has_access_key": true` and a valid `agent_url` to confirm the agent is ready.
 
----
-
 ## Step 4: Test the Chat API
 
-### Testing Scenario
+### Within-Session Memory Test
 
 In this test, we'll simulate a customer service interaction to demonstrate within-session memory:
 
@@ -332,7 +342,6 @@ curl -X POST http://localhost:8000/session \
   -d '{
     "user_id": "user_alice_123"
   }' | jq
-
 ```
 
 Expected response:
@@ -350,7 +359,6 @@ Expected response:
 
 ```bash
 export SESSION_ID="87d12af1-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # Use your actual session_id
-
 ```
 
 Send a message (note: include `user_id` to enable memory):
@@ -364,7 +372,6 @@ curl -X POST http://localhost:8000/ask \
     \"user_id\": \"user_alice_123\",
     \"question\": \"Hi, my name is Alice and I need help with order #12345\"
   }" | jq
-
 ```
 
 Expected response (may take 8-12 seconds due to AI model inference):
@@ -388,7 +395,6 @@ curl -X POST http://localhost:8000/ask \
     \"user_id\": \"user_alice_123\",
     \"question\": \"When will it arrive?\"
   }" | jq
-
 ```
 
 Expected response:
@@ -403,11 +409,9 @@ Expected response:
 
 Notice the AI remembered Alice's name and order number (#12345) from the previous message without repeating the context. The response time (8-12 seconds) is due to DigitalOcean Gradient AI model inference.
 
----
-
 ## Step 5: Test Cross-Session Memory
 
-**Why This Matters:** This test demonstrates the core value of persistent memory. When users return hours or days later, the AI remembers their previous conversations—no need to repeat context!
+This test demonstrates the core value of persistent memory. When users return hours or days later, the AI remembers their previous conversations—no need to repeat context!
 
 ### Testing Scenario
 
@@ -427,7 +431,6 @@ curl -X POST http://localhost:8000/session \
   -d '{
     "user_id": "user_alice_123"
   }' | jq
-
 ```
 
 Expected response:
@@ -445,7 +448,6 @@ Save the new session ID:
 
 ```bash
 export SESSION_ID_NEW="4820e62c-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # Use your actual session_id
-
 ```
 
 User returns later and asks without repeating context (same `user_id` enables cross-session memory):
@@ -459,7 +461,6 @@ curl -X POST http://localhost:8000/ask \
     \"user_id\": \"user_alice_123\",
     \"question\": \"Has my order arrived yet?\"
   }" | jq
-
 ```
 
 Expected response (may take 10-15 seconds):
@@ -472,9 +473,9 @@ Expected response (may take 10-15 seconds):
 }
 ```
 
-🎉 **The AI remembered the order number (#12345) from the PREVIOUS session** without the user repeating anything! This cross-session memory is the core value—users feel recognized and valued, and you save tokens by not repeating context.
+The AI remembered the order number (#12345) from the previous session without the user repeating anything. This cross-session memory is the core value—users feel recognized and valued, and you save tokens by not repeating context.
 
----
+This cross-session memory is the core value—users feel recognized and valued, and you save tokens by not repeating context.
 
 ## Step 6: Embed Widget in Your Website
 
@@ -507,45 +508,39 @@ The widget automatically uses the script's origin as the API URL.
 </script>
 ```
 
-<details>
-<summary><strong>Widget Configuration Options (click to expand)</strong></summary>   
-    
-    | Option | Type | Default | Description |
-    | --- | --- | --- | --- |
-    | `apiUrl` | string | required | Your backend API URL |
-    | `domainId` | string | required | Domain ID from Step 3 (UUID format) |
-    | `position` | string | `'bottom-right'` | Widget position: `'bottom-right'`, `'bottom-left'` |
-    | `primaryColor` | string | `'#007bff'` | Brand color for buttons and header |
-    | `welcomeMessage` | string | `'Hi! How can I help you today?'` | Initial greeting message |
-    | `placeholder` | string | `'Type your message...'` | Input field placeholder |
-    | `widgetTitle` | string | `'Customer Support'` | Widget header title |
-    | `autoScrape` | boolean | `true` | Automatically scrape website for knowledge |
-    
-    Example with full customization:
-    
-    ```html
-    <script>
-      CustomerSupportWidget.init({
-        apiUrl: 'https://your-api.com',
-        domainId: '1c6b2b83-xxxx-xxxx-xxxx-xxxxxxxxxxxx', // Your domain ID from Step 3
-        position: 'bottom-left',
-        primaryColor: '#FF5722',
-        welcomeMessage: 'Welcome back! How can we help today?',
-        placeholder: 'Ask me anything...',
-        widgetTitle: 'Customer Support',
-        autoScrape: false,
-      });
-    </script>
-    
-    ```
-    
-</details>
+| Option           | Type    | Default                           | Description                                        |
+| ---------------- | ------- | --------------------------------- | -------------------------------------------------- |
+| `apiUrl`         | string  | required                          | Your backend API URL                               |
+| `domainId`       | string  | required                          | Domain ID from Step 3 (UUID format)                |
+| `position`       | string  | `'bottom-right'`                  | Widget position: `'bottom-right'`, `'bottom-left'` |
+| `primaryColor`   | string  | `'#007bff'`                       | Brand color for buttons and header                 |
+| `welcomeMessage` | string  | `'Hi! How can I help you today?'` | Initial greeting message                           |
+| `placeholder`    | string  | `'Type your message...'`          | Input field placeholder                            |
+| `widgetTitle`    | string  | `'Customer Support'`              | Widget header title                                |
+| `autoScrape`     | boolean | `true`                            | Automatically scrape website for knowledge         |
+
+Example with full customization:
+
+```html
+<script>
+  CustomerSupportWidget.init({
+    apiUrl: 'https://your-api.com',
+    domainId: '1c6b2b83-xxxx-xxxx-xxxx-xxxxxxxxxxxx', // Your domain ID from Step 3
+    position: 'bottom-left',
+    primaryColor: '#FF5722',
+    welcomeMessage: 'Welcome back! How can we help today?',
+    placeholder: 'Ask me anything...',
+    widgetTitle: 'Customer Support',
+    autoScrape: false,
+  });
+</script>
+```
 
 ### Test the Widget
 
 Visit the demo page to see the widget in action:
 
-**Product Demo:** [http://localhost:8000/static/product_demo.html](http://localhost:8000/static/product_demo.html)
+**Product Demo:** `http://localhost:8000/static/product_demo.html`
 
 The widget automatically handles:
 
@@ -554,9 +549,7 @@ The widget automatically handles:
 - Persistent memory for returning users (via user_id)
 - Responsive design for mobile and desktop
 
-![Product demo screenshot showing the customer support widget with conversation history demonstrating memory features](https://res.cloudinary.com/iambigmomma/image/upload/v1763469811/blog/ai-agent-memory/customer-support-agent-memory-conversation.png)
-
----
+![Product demo screenshot showing the customer support widget with conversation history demonstrating memory features](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Kafka-schema-registry/customer-support-agent-memory-conversation.png)
 
 ## Step 7: Upload Knowledge Base (Optional)
 
@@ -585,7 +578,6 @@ curl -X POST http://localhost:8000/knowledge/upload/file \
   "chunks_created": 47,
   "kb_uuid": "1001f07b-c3bf-11f0-b074-4e013e2ddde4"
 }
-
 ```
 
 ### Option B: Upload Plain Text Content
@@ -599,7 +591,6 @@ curl -X POST http://localhost:8000/knowledge/upload/text \
     "text": "Your FAQ or support content here...",
     "title": "Support FAQ"
   }' | jq
-
 ```
 
 ### Option C: Upload from URL
@@ -611,24 +602,19 @@ curl -X POST http://localhost:8000/knowledge/upload/url \
   -d '{
     "url": "https://example.com/help/shipping-policy"
   }' | jq
-
 ```
 
 ### Check Supported File Types
 
 ```bash
 curl -X GET http://localhost:8000/knowledge/supported-types | jq
-
 ```
 
 ### Verify Knowledge Base
 
 ```bash
 curl -X GET http://localhost:8000/knowledge-bases | jq
-
 ```
-
----
 
 ## Beyond Customer Support
 
@@ -643,9 +629,7 @@ This **agent + memory architecture** works for any consumer-facing scenario requ
 
 Anywhere relationship continuity matters, memory creates measurable value.
 
-![AI agent with memory applications across different industries: healthcare, finance, e-learning, travel, real estate, and retail](https://res.cloudinary.com/iambigmomma/image/upload/v1763470803/blog/ai-agent-memory/ai-agent-memory.png)
-
----
+![AI agent with memory applications across different industries: healthcare, finance, e-learning, travel, real estate, and retail](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Kafka-schema-registry/ai-agent-memory.png)
 
 ## Common Issues & Quick Fixes
 
@@ -661,73 +645,70 @@ Anywhere relationship continuity matters, memory creates measurable value.
 
 **Solution:**
 
-- **Refresh the agent access key**
+To refresh the agent access key, you can use the following script:
 
-  ```bash
-  # Step 1: Create the refresh script (if not already created)
-  cat > refresh_agent_key.py << 'EOF'
-  """Script to refresh the agent access key"""
-  import asyncio
-  import asyncpg
-  import os
-  from dotenv import load_dotenv
-  from digitalocean_client import DigitalOceanGradientClient
+```bash
+# Step 1: Create the refresh script (if not already created)
+cat > refresh_agent_key.py << 'EOF'
+"""Script to refresh the agent access key"""
+import asyncio
+import asyncpg
+import os
+from dotenv import load_dotenv
+from digitalocean_client import DigitalOceanGradientClient
 
-  load_dotenv()
+load_dotenv()
 
-  async def refresh_agent_key():
-      conn = await asyncpg.connect(
-          host=os.getenv("POSTGRES_HOST", "localhost"),
-          port=int(os.getenv("POSTGRES_PORT", 5432)),
-          user=os.getenv("POSTGRES_USER", "do_user"),
-          password=os.getenv("POSTGRES_PASSWORD", "do_user_password"),
-          database=os.getenv("POSTGRES_DB", "customer_support"),
-      )
+async def refresh_agent_key():
+    conn = await asyncpg.connect(
+        host=os.getenv("POSTGRES_HOST", "localhost"),
+        port=int(os.getenv("POSTGRES_PORT", 5432)),
+        user=os.getenv("POSTGRES_USER", "do_user"),
+        password=os.getenv("POSTGRES_PASSWORD", "do_user_password"),
+        database=os.getenv("POSTGRES_DB", "customer_support"),
+    )
 
-      try:
-          agent = await conn.fetchrow("SELECT * FROM agents LIMIT 1")
-          if not agent:
-              print("No agent found")
-              return
+    try:
+        agent = await conn.fetchrow("SELECT * FROM agents LIMIT 1")
+        if not agent:
+            print("No agent found")
+            return
 
-          agent_uuid = agent["agent_uuid"]
-          website_key = agent["website_key"]
+        agent_uuid = agent["agent_uuid"]
+        website_key = agent["website_key"]
 
-          client = DigitalOceanGradientClient()
-          access_key_response = await client.create_agent_access_key(
-              agent_uuid=agent_uuid,
-              key_name=f"key-{website_key}-refresh"
-          )
+        client = DigitalOceanGradientClient()
+        access_key_response = await client.create_agent_access_key(
+            agent_uuid=agent_uuid,
+            key_name=f"key-{website_key}-refresh"
+        )
 
-          new_key = access_key_response.get("secret_key")
-          if new_key:
-              await conn.execute(
-                  "UPDATE agents SET agent_access_key = $1 WHERE agent_uuid = $2",
-                  new_key, agent_uuid
-              )
-              print(f"✓ New access key created (length: {len(new_key)})")
-              print("✓ Database updated")
-          else:
-              print(f"✗ Failed to get key: {access_key_response}")
-      finally:
-          await conn.close()
+        new_key = access_key_response.get("secret_key")
+        if new_key:
+            await conn.execute(
+                "UPDATE agents SET agent_access_key = $1 WHERE agent_uuid = $2",
+                new_key, agent_uuid
+            )
+            print(f"✓ New access key created (length: {len(new_key)})")
+            print("✓ Database updated")
+        else:
+            print(f"✗ Failed to get key: {access_key_response}")
+    finally:
+        await conn.close()
 
-  if __name__ == "__main__":
-      asyncio.run(refresh_agent_key())
-  EOF
+if __name__ == "__main__":
+    asyncio.run(refresh_agent_key())
+EOF
 
-  # Step 2: Run the refresh script
-  docker cp refresh_agent_key.py customer_support_api:/app/
-  docker exec customer_support_api python refresh_agent_key.py
+# Step 2: Run the refresh script
+docker cp refresh_agent_key.py customer_support_api:/app/
+docker exec customer_support_api python refresh_agent_key.py
 
-  # Step 3: Restart the API
-  docker-compose restart api
+# Step 3: Restart the API
+docker-compose restart api
+```
 
-  ```
-
-  After restarting, wait 10-20 seconds and try your request again.
-
----
+After restarting, wait 10-20 seconds and try your request again.
 
 ### Issue 2: Memory Not Persisting Across Sessions
 
@@ -737,12 +718,12 @@ Anywhere relationship continuity matters, memory creates measurable value.
 
 - `user_id` not provided in requests
 - Different `user_id` used across sessions
-- Memori SDK not properly configured
+- Memori API key not configured
 
 **Solution:**
 
 ```bash
-# ✅ Correct: Always include the same user_id
+# Correct: Always include the same user_id
 curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -H "X-Domain-ID: $DOMAIN_ID" \
@@ -752,20 +733,18 @@ curl -X POST http://localhost:8000/ask \
     "question": "Your question here"
   }'
 
-# ❌ Wrong: Omitting user_id
+# Wrong: Omitting user_id
 # This will work but won't have cross-session memory
-
 ```
 
-**Verify memory is enabled:**
+**Check your Memori API key:**
 
 ```bash
-# Check that user_id is being passed consistently
-# Memory requires the same user_id across sessions
+# Verify MEMORI_API_KEY is set in .env
+grep MEMORI_API_KEY .env
 
+# Should show: MEMORI_API_KEY=mk_...
 ```
-
----
 
 ### Issue 3: Agent Deployment Stuck
 
@@ -782,12 +761,9 @@ docker-compose logs api | grep -i "deployment\|agent"
 
 # Force refresh by restarting the API
 docker-compose restart api
-
 ```
 
 If the issue persists, the agent may have failed to deploy. Check your DigitalOcean dashboard or contact support.
-
----
 
 ### Issue 4: Widget Not Loading
 
@@ -801,7 +777,7 @@ If the issue persists, the agent may have failed to deploy. Check your DigitalOc
 
 **Solution:**
 
-```jsx
+```javascript
 // 1. Verify domainId is correct (from Step 3)
 console.log('Domain ID:', 'YOUR_DOMAIN_ID_HERE');
 
@@ -814,8 +790,6 @@ fetch('http://localhost:8000/health')
 // 3. Check browser console for errors
 // Press F12 → Console tab
 ```
-
----
 
 ### Issue 5: Knowledge Base Upload Fails
 
@@ -835,48 +809,92 @@ curl -X GET http://localhost:8000/knowledge-bases | jq
 
 # If KB exists but not attached, wait 2 minutes for background task
 # The system attaches KBs after agent deployment completes
-
 ```
 
----
+## Frequently Asked Questions
+
+### 1. How does conversation memory compression reduce token costs?
+
+Conversation memory compression works by converting long conversation histories into concise summaries. Instead of sending 20 message exchanges (which could be 2,000+ tokens), Memori sends a compressed summary like "User Alice, order #12345, inquired about delivery" (about 20 tokens). This reduces token usage by 40-60% while maintaining context for your customer support AI.
+
+### 2. Can I use this with other AI models besides Llama-3.2-3B-Instruct?
+
+Yes. You can use any model available in your [DigitalOcean Gradient™ AI Console](https://www.digitalocean.com/products/gradient/1-click-models). Update the `DIGITALOCEAN_AI_MODEL_ID` in your `.env` file with the model ID of your choice. Different models have varying performance characteristics, costs, and response times.
+
+### 3. How does cross-session conversation memory work?
+
+Cross-session conversation memory relies on the `user_id` parameter. When you provide the same `user_id` across different sessions, Memori retrieves compressed summaries from previous conversations and includes them in the context. This allows your customer support AI to remember information from days or weeks earlier without storing full conversation histories.
+
+### 4. Is this architecture suitable for production?
+
+Yes. The architecture includes:
+
+- Multi-tenant isolation for security and privacy
+- PostgreSQL for reliable data persistence
+- Docker containerization for easy deployment
+- Per-domain agent isolation for GDPR compliance
+- Error handling and troubleshooting capabilities
+
+For production, you'll want to add monitoring, rate limiting, and deploy to cloud infrastructure. See our [Docker deployment guides](https://www.digitalocean.com/community/tags/docker) for production best practices.
+
+### 5. What happens if the Memori API key expires?
+
+If your Memori API key expires or becomes invalid, memory retrieval will fail, but the chat functionality will continue to work without memory. You'll see errors in the API logs. To fix this, update the `MEMORI_API_KEY` in your `.env` file and restart the services.
+
+### 6. How do I scale this for high traffic?
+
+For high traffic, consider:
+
+- Using a managed PostgreSQL database like [DigitalOcean Managed Databases](https://www.digitalocean.com/products/managed-databases)
+- Deploying the FastAPI backend to [DigitalOcean App Platform](https://www.digitalocean.com/products/app-platform) or [Droplets](https://www.digitalocean.com/products/droplets) with load balancing
+- Implementing caching for frequently accessed memories
+- Using connection pooling for database connections
+- Adding rate limiting to prevent abuse
 
 ## Conclusion
 
-Congratulations! You've successfully built an AI customer support agent with **persistent conversation memory**.
+By following this tutorial, you’ve set up a robust, production-ready customer support AI agent with persistent conversation memory using DigitalOcean Gradient™ AI, FastAPI, PostgreSQL, and the Memori SDK. Your completed system doesn’t just answer questions,it remembers customer interactions across sessions, resulting in more natural conversations and reducing token costs by up to 60%.
 
-### What You've Accomplished
+**In this guide, you:**
 
-✅ **Deployed a complete AI support system** with FastAPI, PostgreSQL, DigitalOcean Gradient AI, Memori SDK, and an embeddable JavaScript widget
+- **Built and deployed an end-to-end AI support system** that can be tailored to your business with FastAPI and PostgreSQL.
+- **Integrated advanced conversation memory** to provide your users with context-aware assistance, improving resolution times and customer satisfaction.
+- **Enabled multi-tenant, secure deployment patterns,** making your architecture fit for SaaS use across multiple domains while maintaining privacy.
+- **Laid the groundwork for real-world scalability and reliability** by leveraging Docker, DigitalOcean infrastructure, and memory-efficient design.
 
-✅ **Implemented conversation memory** that reduces token usage by 40-60% and improves customer satisfaction through contextual awareness
+This conversational memory pattern isn’t just for customer support,it’s a proven approach in industries like healthcare, fintech, travel, and education, wherever continuity and personalization improve results.
 
-✅ **Created a scalable architecture** with per-domain isolation, knowledge base management, and production-ready deployment patterns
-
-This agent + memory pattern works for healthcare, finance, education, travel, real estate, and any domain where relationship continuity matters.
+Want to go even further? Experiment with connecting your agent to your domain knowledge, CRM, or ticketing systems, and monitor actual user conversations so you can iterate and optimize over time. For advanced and real-time AI agent patterns—including serverless workflows and horizontal scaling—check out our tutorial on [building real-time AI agents with Gradient and serverless functions](https://www.digitalocean.com/community/tutorials/ai-agents-gradient-platform-functions).
 
 ### Next Steps
 
 1. **Add domain-specific knowledge**
+
    - Upload your FAQ documents, product manuals, policies
    - Train the agent on your specific use cases
+
 2. **Customize the conversation flow**
+
    - Modify system prompts in the backend
    - Add business logic for escalation triggers
+
 3. **Monitor and optimize**
+
    - Track token usage and costs
    - Analyze conversation patterns for improvements
    - A/B test different greeting messages
+
 4. **Scale for production**
-   - Deploy to cloud infrastructure
+
+   - Deploy to [DigitalOcean App Platform](https://www.digitalocean.com/products/app-platform) or [Droplets](https://www.digitalocean.com/products/droplets) with load balancing
    - Set up monitoring and alerting
    - Implement rate limiting and security measures
+   - Consider [DigitalOcean Managed Databases](https://www.digitalocean.com/products/managed-databases) for PostgreSQL
+
 5. **Integrate with existing systems**
+
    - Connect to CRM for customer data
    - Integrate with ticketing systems for escalation
    - Add analytics dashboard for insights
 
----
-
-**Source code:** [github.com/Boburmirzo/customer-support-agent-memory](https://github.com/Boburmirzo/customer-support-agent-memory)
-
-**Platform:** [DigitalOcean Gradient AI](https://www.digitalocean.com/products/gradientai/platform)
+   _Ready to keep building? Continue your journey with [DigitalOcean Gradient™ AI Platform](https://www.digitalocean.com/products/gradientai/platform) for seamless deployment, scaling, and management of your intelligent applications._
