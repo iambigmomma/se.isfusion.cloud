@@ -13,12 +13,14 @@ export type BlogFrontmatter = {
   tags: string;
 };
 
-export type ContentType = 'blog' | 'library' | 'projects';
+export type ContentType = 'blog' | 'library' | 'projects' | 'talks';
 
 export type PickFrontmatter<T extends ContentType> = T extends 'blog'
   ? BlogFrontmatter
   : T extends 'library'
   ? LibraryFrontmatter
+  : T extends 'talks'
+  ? TalkFrontmatter
   : ProjectFrontmatter;
 
 export type InjectedMeta = { views?: number; likes?: number };
@@ -60,9 +62,29 @@ export type ProjectType = {
   frontmatter: ProjectFrontmatter;
 };
 
+export type TalkFrontmatter = {
+  slug: string;
+  title: string;
+  event: string;
+  publishedAt: string;
+  location?: string;
+  conferenceLogo: string;
+  galleryPhotos: string[]; // Array of photo URLs for gallery
+  featured?: boolean;
+};
+
+export type TalkType = {
+  code: string;
+  frontmatter: TalkFrontmatter;
+};
+
 export type FrontmatterWithTags = BlogFrontmatter | LibraryFrontmatter;
-export type FrontmatterWithDate = BlogFrontmatter | ProjectFrontmatter;
+export type FrontmatterWithDate =
+  | BlogFrontmatter
+  | ProjectFrontmatter
+  | TalkFrontmatter;
 export type Frontmatter =
   | ProjectFrontmatter
   | BlogFrontmatter
-  | LibraryFrontmatter;
+  | LibraryFrontmatter
+  | TalkFrontmatter;

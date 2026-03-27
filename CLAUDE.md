@@ -34,6 +34,16 @@ yarn mdgen <slug>       # Generate cross-posted markdown for dev.to and Hashnode
 
 ## Architecture
 
+### Path Aliases
+
+TypeScript is configured with `@/*` aliases that map to `src/*`. All imports use these aliases for better organization:
+
+- `@/lib` - Utility functions and helpers
+- `@/hooks` - React hooks
+- `@/components` - React components
+- `@/types` - TypeScript type definitions
+- `@/constants` - Constants and configuration
+
 ### Content Management with MDX
 
 All content (blog posts, library snippets, projects) lives in `src/contents/` as MDX files with frontmatter metadata. The MDX processing pipeline is centralized in `src/lib/mdx.ts`:
@@ -43,7 +53,32 @@ All content (blog posts, library snippets, projects) lives in `src/contents/` as
 - **`getAllFilesFrontmatter(type)`**: Extracts frontmatter from all files of a type, includes reading time calculation
 - **`getRecommendations(currSlug)`**: Returns 3 related blog posts based on tag similarity
 
-Content types are defined in `src/types/frontmatters.ts`. Each type has specific required frontmatter fields.
+Content types are defined in `src/types/frontmatters.ts`. Each type has specific required frontmatter fields:
+
+- **BlogFrontmatter**: title, description, banner, publishedAt, tags
+- **LibraryFrontmatter**: title, description, tags
+- **ProjectFrontmatter**: title, description, publishedAt, techs, banner
+
+### MDX Client-Side Utilities
+
+`src/lib/mdx-client.ts` provides client-side utilities for content manipulation:
+
+- **`sortByDate()`**: Sorts content by publishedAt or lastUpdated date
+- **`sortByTitle()`**: Alphabetically sorts content by title
+- **`getTags()`**: Extracts all unique tags from content, sorted by frequency
+- **`getFeatured()`**: Filters content by featured slugs array
+
+### MDX Components
+
+MDX content can use custom React components defined in `src/components/content/MDXComponents.tsx`:
+
+- `CloudinaryImg` - Optimized images from Cloudinary
+- `LiteYouTubeEmbed` - Lightweight YouTube embeds
+- `GithubCard` - GitHub repository cards
+- `TweetCard` - Embedded tweets
+- `SplitImage` / `Split` - Side-by-side image layouts
+- `Quiz` - Interactive quiz components
+- `CustomCode` / `Pre` - Enhanced code blocks with syntax highlighting
 
 ### Database Integration (FaunaDB)
 
@@ -56,16 +91,28 @@ View and like tracking is handled through FaunaDB via `src/lib/fauna.ts`:
 
 The database stores: `{ slug, views, likes, likesByUser: { [sessionId]: count } }`
 
+### SWR Data Fetching Pattern
+
+The site uses SWR for client-side data fetching with optimistic updates. Key hook: `src/hooks/useContentMeta.tsx`:
+
+- Fetches content metadata (views, likes) from `/api/content/[slug]`
+- Uses `fallbackData` from pre-fetched cache for instant rendering
+- Implements optimistic UI updates for like button
+- Conditionally increments views on page load based on `incrementMetaFlag`
+- Debounced mutation revalidation (1s) after like actions
+
 ### Feature Flags
 
-All major features are feature-flagged in `src/constants/env.ts`. By default, most features require production environment:
+All major features are feature-flagged in `src/constants/env.ts`. By default, most features require production environment (`isProd = process.env.NODE_ENV === 'production'`):
 
 - `commentFlag`: Giscus comments integration
 - `contentMetaFlag`: FaunaDB view/like tracking
-- `incrementMetaFlag`: Auto-increment views on page load
+- `incrementMetaFlag`: Auto-increment views on page load (also checks localStorage)
 - `spotifyFlag`: Spotify Now Playing widget
 - `newsletterFlag`: Revue newsletter integration
 - `feedbackFlag`: Feedback Fish integration
+- `sayHelloFlag`: Console greeting message
+- `blockDomainMeta`: Domain-restricted meta increments
 
 To enable features locally, change `isProd` to `true` for the specific flag, but expect errors without proper environment variables.
 
@@ -74,7 +121,12 @@ To enable features locally, change `isProd` to `true` for the specific flag, but
 Next.js pages follow standard routing in `src/pages/`:
 
 - Dynamic routes: `blog/[slug].tsx`, `library/[slug].tsx`, `projects/[slug].tsx`
-- API routes in `pages/api/` handle server-side operations (Spotify, content metadata, likes, newsletter)
+- API routes in `pages/api/` handle server-side operations:
+  - `/api/spotify`: Spotify Now Playing data
+  - `/api/content`: Content metadata CRUD
+  - `/api/content/[slug]`: Single content metadata and view increment
+  - `/api/like/[slug]`: Like increment endpoint
+  - `/api/newsletter`: Newsletter subscription
 
 ### Component Organization
 
@@ -82,6 +134,10 @@ Components are organized by purpose in `src/components/`:
 
 - `buttons/`: Interactive button components
 - `content/`: Blog-specific components (MDX components, comment section, table of contents)
+  - `blog/`: Blog-specific components (Quiz, etc.)
+  - `card/`: Card components (GithubCard)
+  - `library/`: Library-specific components
+  - `projects/`: Project-specific components
 - `form/`: Form elements and inputs
 - `images/`: Image components with Cloudinary integration
 - `layout/`: Layout wrappers, header, footer, SEO
@@ -89,7 +145,7 @@ Components are organized by purpose in `src/components/`:
 
 ### Image Handling
 
-Images are hosted on Cloudinary. The site uses lazy loading with blur placeholders. Cloudinary URLs use the `cloudinary-build-url` package for optimization.
+Images are hosted on Cloudinary. The site uses lazy loading with blur placeholders. Cloudinary URLs use the `cloudinary-build-url` package for optimization. Next.js Image component is configured to allow domains: `res.cloudinary.com` and `i.scdn.co` (for Spotify).
 
 ### Styling Approach
 
@@ -100,7 +156,7 @@ Images are hosted on Cloudinary. The site uses lazy loading with blur placeholde
 
 ### Import Sorting Convention
 
-ESLint enforces strict import ordering via `simple-import-sort`:
+ESLint enforces strict import ordering via `simple-import-sort` plugin (see `.eslintrc.js`):
 
 1. External libraries & side effects
 2. CSS files
@@ -111,38 +167,46 @@ ESLint enforces strict import ordering via `simple-import-sort`:
 7. Relative imports (up to 3 levels)
 8. `@/types`
 
+The linter will auto-fix import order on save or when running `yarn lint:fix`.
+
 ## Testing
 
-End-to-end tests use Cypress. Test files are in `cypress/integration/`. The project uses local-cypress for running tests.
+End-to-end tests use Cypress. Test files are in `cypress/integration/`. The project uses local-cypress for running tests. Use `yarn cy` for interactive mode or `yarn cy:headless` for CI/headless mode.
 
 ## Deployment
 
-The site is configured for Vercel deployment (`vercel.json`). Post-build, `next-sitemap` generates the sitemap automatically.
+The site is configured for Vercel deployment (`vercel.json`). Post-build, `next-sitemap` generates the sitemap automatically via the `postbuild` script.
 
 ## Cross-Posting Workflow
 
-The `scripts/cross-post.js` script converts MDX blog posts for external platforms:
+The `scripts/cross-post.js` script converts MDX blog posts for external platforms (dev.to and Hashnode):
 
-- Transforms custom React components (CloudinaryImg, GithubCard, LiteYouTubeEmbed, TweetCard) into platform-specific syntax
+- Transforms custom React components into platform-specific syntax:
+  - `CloudinaryImg` → Direct image URLs
+  - `GithubCard` → `{% github user/repo %}` (dev.to) or `%[https://github.com/user/repo]` (Hashnode)
+  - `LiteYouTubeEmbed` → `{% youtube id %}` (dev.to) or YouTube embed URL (Hashnode)
+  - `TweetCard` → `{% twitter id %}` (dev.to) or Twitter URL (Hashnode)
 - Appends platform-specific footers with links back to the main site
-- Downloads OG images for social sharing
+- Downloads OG images for social sharing (from `og.isfusion.cloud` API)
+- Outputs to `scripts/out/<slug>/` with `devto.mdx`, `hashnode.mdx`, and `og_image.png`
 
 ## Environment Variables
 
 Required variables are documented in `.env.example`:
 
-- `FAUNA_SECRET`: FaunaDB database access
-- `IP_ADDRESS_SALT`: For hashing user sessions
-- `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REFRESH_TOKEN`: Spotify API integration
-- `ADMIN_PASSWORD`: Dev tools page access
-- `REVUE_TOKEN`: Newsletter subscription
-- `DEVTO_KEY`: Dev.to cross-posting
+- `FAUNA_SECRET`: FaunaDB database access for view/like tracking
+- `IP_ADDRESS_SALT`: For hashing user sessions in like tracking
+- `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REFRESH_TOKEN`: Spotify API integration for Now Playing widget
+- `ADMIN_PASSWORD`: Dev tools page access (default: "admin")
+- `REVUE_TOKEN`: Newsletter subscription via Revue API
+- `DEVTO_KEY`: Dev.to cross-posting API key
 
 Most features gracefully degrade when environment variables are missing in development.
 
 ## Code Quality
 
-- Husky pre-commit hooks run lint-staged
+- Husky pre-commit hooks run lint-staged (ESLint + Prettier on staged files)
 - Commitlint enforces conventional commit messages
 - TypeScript strict mode enabled
 - ESLint configured with TypeScript, Next.js, and Prettier rules
+- Unused imports automatically flagged and removable via `unused-imports` plugin

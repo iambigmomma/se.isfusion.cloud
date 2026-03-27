@@ -78,4 +78,17 @@ module.exports = {
     React: true,
     JSX: true,
   },
+  overrides: [
+    {
+      // Allow <img> tags in talks components for external URLs and lightbox
+      files: [
+        'src/components/content/talks/**',
+        'src/pages/talks.tsx',
+        'src/pages/talks/**',
+      ],
+      rules: {
+        '@next/next/no-img-element': 'off',
+      },
+    },
+  ],
 };
