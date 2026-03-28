@@ -17,11 +17,11 @@ export default function ConferenceLogos() {
     },
     {
       name: 'MongoDB',
-      logo: 'https://webimages.mongodb.com/_com_assets/cms/kuzt9r42or1fxvlq2-Meta_Generic.png',
+      logo: 'https://img.favpng.com/14/4/4/mongodb-logo-database-nosql-png-favpng-EPSjYNnQKvB3c3Dsm4B8uN1sS.jpg',
     },
     {
       name: 'BuildStuff',
-      logo: 'https://www.buildstuff.events/images/logo.png',
+      logo: 'https://www.vhv.rs/dpng/d/90-904107_build-stuff-logo-hd-png-download.png',
     },
     {
       name: 'DevTalks',
@@ -33,7 +33,7 @@ export default function ConferenceLogos() {
     },
     {
       name: 'Cloud AI Infrastructure Summit',
-      logo: 'https://cdn.asp.events/CLIENT_CloserSt_D86EA381_5056_B739_5482D50A1A831DDD/sites/tech-show-frankfurt-2025/media/Cloud-and-AI-Infrastructure-2025_Frankfurt-Cut.jpg',
+      logo: 'https://cdn.asp.events/CLIENT_CloserSt_D86EA381_5056_B739_5482D50A1A831DDD/sites/tech-show-frankfurt-2025/media/cloudexpoeurope/CAI.png/fit-in/1400x1400',
     },
     {
       name: 'EU Business School',
