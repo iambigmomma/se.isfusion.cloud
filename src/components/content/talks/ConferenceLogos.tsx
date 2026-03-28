@@ -17,7 +17,7 @@ export default function ConferenceLogos() {
     },
     {
       name: 'MongoDB',
-      logo: 'https://www.svgrepo.com/show/303232/mongodb-logo.svg',
+      logo: 'https://webimages.mongodb.com/_com_assets/cms/kuyjf3vea2hg34taa-horizontal_default_slate_blue.svg?auto=format%252Ccompress',
     },
     {
       name: 'BuildStuff',
@@ -55,10 +55,6 @@ export default function ConferenceLogos() {
           Speaking Engagements
         </h2>
         <div className='relative'>
-          {/* Gradient overlays for fade effect */}
-          <div className='absolute left-0 top-0 bottom-0 z-10 w-24 bg-gradient-to-r from-white to-transparent dark:from-gray-900' />
-          <div className='absolute right-0 top-0 bottom-0 z-10 w-24 bg-gradient-to-l from-white to-transparent dark:from-gray-900' />
-
           {/* Scrolling container */}
           <div className='logos-marquee flex items-center gap-12'>
             {allLogos.map((conf, idx) => (
