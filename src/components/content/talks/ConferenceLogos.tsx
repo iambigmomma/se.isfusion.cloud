@@ -9,7 +9,7 @@ export default function ConferenceLogos() {
   const conferences: Conference[] = [
     {
       name: 'DigitalOcean',
-      logo: 'https://www.digitalocean.com/_next/static/media/logo.d16a1d81.svg',
+      logo: 'https://cdn.worldvectorlogo.com/logos/digitalocean-2.svg',
     },
     {
       name: 'NDC London',
@@ -64,7 +64,7 @@ export default function ConferenceLogos() {
             {allLogos.map((conf, idx) => (
               <div
                 key={idx}
-                className='flex h-20 w-32 flex-shrink-0 items-center justify-center opacity-70 grayscale transition-all duration-300 hover:opacity-100 hover:grayscale-0'
+                className='flex h-20 w-32 flex-shrink-0 items-center justify-center transition-all duration-300 hover:scale-110'
               >
                 <img
                   src={conf.logo}
