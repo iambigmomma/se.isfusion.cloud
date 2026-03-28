@@ -7,23 +7,37 @@ type Conference = {
 
 export default function ConferenceLogos() {
   const conferences: Conference[] = [
-    { name: 'COSCUP', logo: 'https://coscup.org/2024/logo-512.png' },
     {
-      name: 'PyCon Taiwan',
-      logo: 'https://tw.pycon.org/2024/static/media/logo-text.png',
-    },
-    { name: 'JSConf Asia', logo: 'https://jsconf.asia/logo.png' },
-    {
-      name: 'Google DevFest',
-      logo: 'https://developers.google.com/profile/badges/events/devfest/2024/badge.svg',
+      name: 'DigitalOcean',
+      logo: 'https://www.digitalocean.com/_next/static/media/logo.d16a1d81.svg',
     },
     {
-      name: 'AWS Summit',
-      logo: 'https://d1.awsstatic.com/events/aws-hosted-events/2024/EMEA/summit-berlin-2024/ase24-berlin-lockup-white.04f5ec9f3be6f1e23e44a0cc2d04aaef9cc6db94.png',
+      name: 'NDC London',
+      logo: 'https://ndclondon.com/img/logo.svg',
     },
     {
-      name: 'Microsoft Build',
-      logo: 'https://news.microsoft.com/wp-content/uploads/prod/sites/558/2024/01/Microsoft-Build-2024-logo-1024x576.png',
+      name: 'MongoDB',
+      logo: 'https://webimages.mongodb.com/_com_assets/cms/kuzt9r42or1fxvlq2-Meta_Generic.png',
+    },
+    {
+      name: 'BuildStuff',
+      logo: 'https://www.buildstuff.events/images/logo.png',
+    },
+    {
+      name: 'DevTalks',
+      logo: 'https://devtalks.ro/wp-content/uploads/2024/01/devtalks-logo.png',
+    },
+    {
+      name: 'AI DevWorld',
+      logo: 'https://aidevworld.com/wp-content/uploads/2024/01/logo.png',
+    },
+    {
+      name: 'EU Business School',
+      logo: 'https://www.euruni.edu/themes/custom/euruni/logo.svg',
+    },
+    {
+      name: 'Big Data Conference',
+      logo: 'https://bigdataconf.de/wp-content/uploads/2023/05/BDC-Logo.png',
     },
   ];
 
@@ -34,7 +48,7 @@ export default function ConferenceLogos() {
     <div className='w-full overflow-hidden bg-gradient-to-r from-gray-50 via-white to-gray-50 py-16 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900'>
       <div className='layout'>
         <h2 className='mb-8 text-center text-2xl font-bold text-gray-800 dark:text-gray-200'>
-          Featured Conferences
+          Speaking Engagements
         </h2>
         <div className='relative'>
           {/* Gradient overlays for fade effect */}
