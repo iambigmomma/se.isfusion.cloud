@@ -29,7 +29,11 @@ export default function ConferenceLogos() {
     },
     {
       name: 'AI DevWorld',
-      logo: 'https://aidevworld.com/wp-content/uploads/2024/01/logo.png',
+      logo: 'https://aidevworld.com/wp-content/uploads/2025/09/AIDevWorld.png',
+    },
+    {
+      name: 'Cloud AI Infrastructure Summit',
+      logo: 'https://sessionize.com/image/1d03-1140o400o3-nxzwDa8V6E5tifQoZvkVjb.png',
     },
     {
       name: 'EU Business School',
