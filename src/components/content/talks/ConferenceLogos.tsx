@@ -17,11 +17,11 @@ export default function ConferenceLogos() {
     },
     {
       name: 'MongoDB',
-      logo: 'https://img.favpng.com/14/4/4/mongodb-logo-database-nosql-png-favpng-EPSjYNnQKvB3c3Dsm4B8uN1sS.jpg',
+      logo: 'https://www.svgrepo.com/show/303232/mongodb-logo.svg',
     },
     {
       name: 'BuildStuff',
-      logo: 'https://www.vhv.rs/dpng/d/90-904107_build-stuff-logo-hd-png-download.png',
+      logo: 'https://cdn.prod.website-files.com/62fbacdd956e3642e4ac995a/637779f57dad396cdd52a52c_logo-buildstuff.png',
     },
     {
       name: 'DevTalks',
