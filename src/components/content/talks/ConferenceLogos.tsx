@@ -25,7 +25,7 @@ export default function ConferenceLogos() {
     },
     {
       name: 'DevTalks',
-      logo: 'https://papercallio-production.s3.amazonaws.com/uploads/event/logo/1739/dev_talks_black.png',
+      logo: 'https://www.devtalks.ro/storage/Event/000/000/003/logo/menu/4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce.png?v=1678815716',
     },
     {
       name: 'AI DevWorld',
@@ -49,15 +49,15 @@ export default function ConferenceLogos() {
   const allLogos = [...conferences, ...conferences, ...conferences];
 
   return (
-    <div className='w-full overflow-hidden bg-gradient-to-r from-gray-50 via-white to-gray-50 py-16 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900'>
+    <div className='w-full overflow-hidden py-16'>
       <div className='layout'>
-        <h2 className='mb-8 text-center text-2xl font-bold text-gray-800 dark:text-gray-200'>
+        <h2 className='mb-8 text-center text-2xl font-bold'>
           Speaking Engagements
         </h2>
         <div className='relative'>
           {/* Gradient overlays for fade effect */}
-          <div className='absolute left-0 top-0 bottom-0 z-10 w-24 bg-gradient-to-r from-white to-transparent dark:from-gray-800' />
-          <div className='absolute right-0 top-0 bottom-0 z-10 w-24 bg-gradient-to-l from-white to-transparent dark:from-gray-800' />
+          <div className='absolute left-0 top-0 bottom-0 z-10 w-24 bg-gradient-to-r from-white to-transparent dark:from-gray-900' />
+          <div className='absolute right-0 top-0 bottom-0 z-10 w-24 bg-gradient-to-l from-white to-transparent dark:from-gray-900' />
 
           {/* Scrolling container */}
           <div className='logos-marquee flex items-center gap-12'>
