@@ -13,7 +13,7 @@ export default function ConferenceLogos() {
     },
     {
       name: 'NDC London',
-      logo: 'https://ndclondon.com/img/logo.svg',
+      logo: 'https://ravendb.net/media/2025-11-ndc-london-logo-black.png',
     },
     {
       name: 'MongoDB',
@@ -25,7 +25,7 @@ export default function ConferenceLogos() {
     },
     {
       name: 'DevTalks',
-      logo: 'https://devtalks.ro/wp-content/uploads/2024/01/devtalks-logo.png',
+      logo: 'https://papercallio-production.s3.amazonaws.com/uploads/event/logo/1739/dev_talks_black.png',
     },
     {
       name: 'AI DevWorld',
@@ -33,15 +33,15 @@ export default function ConferenceLogos() {
     },
     {
       name: 'Cloud AI Infrastructure Summit',
-      logo: 'https://sessionize.com/image/1d03-1140o400o3-nxzwDa8V6E5tifQoZvkVjb.png',
+      logo: 'https://cdn.asp.events/CLIENT_CloserSt_D86EA381_5056_B739_5482D50A1A831DDD/sites/tech-show-frankfurt-2025/media/Cloud-and-AI-Infrastructure-2025_Frankfurt-Cut.jpg',
     },
     {
       name: 'EU Business School',
-      logo: 'https://www.euruni.edu/themes/custom/euruni/logo.svg',
+      logo: 'https://www.omneseducation.com/wp-content/uploads/sites/7/2022/01/EU_Business_School_logo_2017_new.png',
     },
     {
       name: 'Big Data Conference',
-      logo: 'https://bigdataconf.de/wp-content/uploads/2023/05/BDC-Logo.png',
+      logo: 'https://papercallio-production.s3.amazonaws.com/uploads/event/logo/4309/mid_300_BIGDTA_-_full_logo_yellow.png',
     },
   ];
 
