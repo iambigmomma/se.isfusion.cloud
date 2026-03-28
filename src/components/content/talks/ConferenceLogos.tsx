@@ -65,7 +65,11 @@ export default function ConferenceLogos() {
                 <img
                   src={conf.logo}
                   alt={conf.name}
-                  className='max-h-full max-w-full object-contain'
+                  className={`max-h-full max-w-full object-contain ${
+                    conf.name === 'NDC London' || conf.name === 'MongoDB'
+                      ? 'dark:rounded-lg dark:bg-white dark:px-3 dark:py-2'
+                      : ''
+                  }`}
                   onError={(e) => {
                     // Fallback to text if logo fails to load
                     const target = e.target as HTMLImageElement;
