@@ -43,8 +43,6 @@ export default function TalksPage({
     }))
   );
 
-  const totalTalks = talks.length;
-
   return (
     <Layout>
       <Seo
@@ -63,38 +61,10 @@ export default function TalksPage({
               applications, and software architecture.
             </p>
 
-            {/* Stats */}
-            <div className='mt-6 flex flex-wrap gap-6' data-fade='2'>
-              <div className='flex flex-col'>
-                <span className='text-primary-600 text-3xl font-bold dark:text-primary-400'>
-                  {totalTalks}+
-                </span>
-                <span className='text-sm text-gray-600 dark:text-gray-400'>
-                  Conferences
-                </span>
-              </div>
-              <div className='flex flex-col'>
-                <span className='text-primary-600 text-3xl font-bold dark:text-primary-400'>
-                  {allPhotos.length}
-                </span>
-                <span className='text-sm text-gray-600 dark:text-gray-400'>
-                  Photos
-                </span>
-              </div>
-              <div className='flex flex-col'>
-                <span className='text-primary-600 text-3xl font-bold dark:text-primary-400'>
-                  5+
-                </span>
-                <span className='text-sm text-gray-600 dark:text-gray-400'>
-                  Countries
-                </span>
-              </div>
-            </div>
-
-            {/* Photo Gallery Grid */}
+            {/* Photo Gallery - Masonry Layout */}
             <div
-              data-fade='3'
-              className='mt-12 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4'
+              data-fade='2'
+              className='mt-12 columns-2 gap-4 space-y-4 md:columns-3 lg:columns-4'
             >
               {allPhotos.map((photo, idx) => (
                 <button
@@ -103,12 +73,12 @@ export default function TalksPage({
                     setPhotoIndex(idx);
                     setIsOpen(true);
                   }}
-                  className='group relative aspect-square cursor-pointer overflow-hidden rounded-lg bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 dark:bg-gray-800'
+                  className='group relative mb-4 block w-full cursor-pointer overflow-hidden rounded-lg bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 dark:bg-gray-800'
                 >
                   <img
                     src={photo.url}
                     alt={`${photo.event} - ${photo.title}`}
-                    className='h-full w-full object-cover transition-transform duration-300 group-hover:scale-110'
+                    className='w-full transition-transform duration-300 group-hover:scale-110'
                   />
                   {/* Hover overlay */}
                   <div className='absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/70 via-black/20 to-transparent p-4 opacity-0 transition-opacity duration-300 group-hover:opacity-100'>
