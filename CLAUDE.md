@@ -30,7 +30,60 @@ yarn cy:headless        # Run Cypress tests in headless mode
 yarn mdgen <slug>       # Generate cross-posted markdown for dev.to and Hashnode
                         # Example: yarn mdgen my-blog-post
                         # Outputs to scripts/out/<slug>/ with devto.mdx, hashnode.mdx, and og_image.png
+
+# Pre-Commit Workflow
+yarn pre-commit-check   # Run typecheck + lint before committing
+yarn test:all           # Run typecheck + lint + build (full CI/CD check)
 ```
+
+## Pre-Commit Workflow
+
+**IMPORTANT**: Always run checks before committing to ensure CI/CD passes:
+
+```bash
+# Quick check before commit (recommended for every commit)
+yarn pre-commit-check
+
+# Full check before pushing to main (includes build)
+yarn test:all
+```
+
+### What Gets Checked Automatically
+
+The project uses **Husky + lint-staged** for automatic pre-commit checks:
+
+1. **ESLint** - Code quality and style (zero warnings allowed)
+2. **Prettier** - Code formatting
+3. **Commitlint** - Conventional commit message format
+
+### What You Should Run Manually
+
+**Before every commit**, run:
+```bash
+yarn pre-commit-check
+```
+
+This will:
+- ✅ TypeScript type checking (`yarn typecheck`)
+- ✅ ESLint with zero warnings (`yarn lint:strict`)
+
+**Before pushing to main**, run:
+```bash
+yarn test:all
+```
+
+This will:
+- ✅ TypeScript type checking
+- ✅ ESLint with zero warnings
+- ✅ Production build test
+
+### Common Issues
+
+1. **TypeScript errors**: Run `yarn typecheck` to see all type errors
+2. **Import sorting**: Run `yarn lint --fix` to auto-fix
+3. **Commit message format**: Use conventional commits (feat:, fix:, docs:, etc.)
+   - Lines must not exceed 100 characters
+   - Format: `type: short description\n\nLonger explanation with\nline breaks as needed`
 
 ## Architecture
 

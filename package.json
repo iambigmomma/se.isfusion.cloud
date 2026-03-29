@@ -12,6 +12,8 @@
     "typecheck": "tsc --noEmit --incremental false",
     "format": "prettier -w .",
     "format:check": "prettier -c .",
+    "test:all": "yarn typecheck && yarn lint:strict && yarn build",
+    "pre-commit-check": "yarn typecheck && yarn lint:strict",
     "cy": "cypress open",
     "cy:headless": "cypress run",
     "postbuild": "next-sitemap",
