@@ -29,13 +29,13 @@ export default function TalkCard({ talk, className }: TalkCardProps) {
       >
         {/* 演講照片 */}
         <div className='relative h-64 w-full overflow-hidden bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-800 dark:to-gray-900'>
-          {talk.banner.startsWith('http') ? (
+          {talk.banner && talk.banner.startsWith('http') ? (
             <img
               src={talk.banner}
               alt={talk.title}
               className='h-full w-full object-cover transition-transform duration-500 group-hover:scale-110'
             />
-          ) : (
+          ) : talk.banner ? (
             <CloudinaryImg
               className='h-full w-full object-cover transition-transform duration-500 group-hover:scale-110'
               publicId={`v1684217694/${talk.banner}`}
@@ -44,7 +44,7 @@ export default function TalkCard({ talk, className }: TalkCardProps) {
               height={600}
               preview={false}
             />
-          )}
+          ) : null}
 
           {/* Conference Logo Overlay */}
           {talk.conferenceLogo && (

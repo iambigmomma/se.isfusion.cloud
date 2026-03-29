@@ -3,12 +3,12 @@ import { GetStaticPaths, GetStaticProps } from 'next';
 import * as React from 'react';
 import {
   HiCalendar,
+  HiDocumentText,
   HiLocationMarker,
   HiOutlineEye,
   HiPlay,
   HiUsers,
 } from 'react-icons/hi';
-import { SiGoogledocs } from 'react-icons/si';
 
 import { trackEvent } from '@/lib/analytics';
 import { getFileBySlug, getFiles } from '@/lib/mdx';
@@ -101,20 +101,20 @@ export default function SingleTalkPage({ code, frontmatter }: TalkType) {
       <main>
         <section className=''>
           <div className='layout'>
-            {frontmatter.banner.startsWith('http') ? (
+            {frontmatter.banner && frontmatter.banner.startsWith('http') ? (
               <img
                 src={frontmatter.banner}
                 alt={frontmatter.title}
                 className='h-auto w-full rounded-lg'
               />
-            ) : (
+            ) : frontmatter.banner ? (
               <CloudinaryImg
                 publicId={`iambigmomma/${frontmatter.banner}`}
                 alt={frontmatter.title}
                 width={1440}
                 height={792}
               />
-            )}
+            ) : null}
 
             <div className='mt-4 flex items-center gap-3'>
               <h1 className='m-0'>{frontmatter.title}</h1>
@@ -178,7 +178,7 @@ export default function SingleTalkPage({ code, frontmatter }: TalkType) {
                     }
                     className='inline-flex items-center gap-2 rounded-md bg-blue-100 px-4 py-2 text-blue-700 transition-colors hover:bg-blue-200 dark:bg-blue-900 dark:text-blue-100 dark:hover:bg-blue-800'
                   >
-                    <SiGoogledocs className='text-lg' />
+                    <HiDocumentText className='text-lg' />
                     View Slides
                   </CustomLink>
                 )}

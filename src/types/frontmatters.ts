@@ -67,10 +67,17 @@ export type TalkFrontmatter = {
   title: string;
   event: string;
   publishedAt: string;
+  lastUpdated?: string;
   location?: string;
   conferenceLogo: string;
-  galleryPhotos: string[]; // Array of photo URLs for gallery
+  galleryPhotos: string[];
   featured?: boolean;
+  banner?: string;
+  status?: 'delivered' | 'accepted' | 'invited';
+  description?: string;
+  audience?: string;
+  video?: string;
+  slides?: string;
 };
 
 export type TalkType = {
