@@ -108,6 +108,7 @@ export default function CloudinaryImg({
             src={url}
             alt={alt}
             title={title || alt}
+            loading='eager'
           />
         </div>
       </div>
