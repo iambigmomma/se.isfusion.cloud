@@ -30,14 +30,21 @@ export default function AboutPage() {
               <Accent>Jeff Fan</Accent>
             </h1>
             <div className='mt-4' data-fade='2'>
+              {/* <CloudinaryImg
+                className='float-right ml-6 w-36 md:w-72'
+                publicId='v1660493139/personal-site/jeff-dim-sum'
+                width='2890'
+                height='2890'
+                alt='Jeff Fan'
+                preview={true}
+              /> */}
               <CloudinaryImg
                 className='float-right ml-6 w-36 md:w-72'
                 publicId='v1660493139/personal-site/jeff-101-square'
                 width='3072'
                 height='3072'
                 alt='Jeff Fan'
-                preview={false}
-                noBlur={true}
+                preview={true}
               />
               <article className='prose dark:prose-invert'>
                 <p data-fade='3'>Hey there👋</p>

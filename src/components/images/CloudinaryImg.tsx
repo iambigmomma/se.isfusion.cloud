@@ -15,7 +15,6 @@ type CloudinaryImgType = {
   className?: string;
   preview?: boolean;
   noStyle?: boolean;
-  noBlur?: boolean;
   aspect?: {
     width: number;
     height: number;
@@ -32,7 +31,6 @@ export default function CloudinaryImg({
   className,
   preview = true,
   noStyle = false,
-  noBlur = false,
   mdx = false,
   style,
   aspect,
@@ -91,32 +89,25 @@ export default function CloudinaryImg({
         className='img-blur'
         onClick={preview ? () => setIsOpen(true) : undefined}
       >
-        {!noBlur && (
-          <style jsx>{`
-            .img-blur::before {
-              content: '';
-              position: absolute;
-              inset: 0;
-              filter: blur(20px);
-              z-index: 0;
-              background-image: url(${urlBlurred});
-              background-position: center center;
-              background-size: 100%;
-            }
-          `}</style>
-        )}
-        <div
-          className='absolute top-0 left-0'
-          style={{ zIndex: 10, position: 'relative' }}
-        >
+        <style jsx>{`
+          .img-blur::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            filter: blur(20px);
+            z-index: 0;
+            background-image: url(${urlBlurred});
+            background-position: center center;
+            background-size: 100%;
+          }
+        `}</style>
+        <div className='absolute top-0 left-0'>
           <Image
             width={width}
             height={height}
             src={url}
             alt={alt}
             title={title || alt}
-            priority={true}
-            loading='eager'
           />
         </div>
       </div>
