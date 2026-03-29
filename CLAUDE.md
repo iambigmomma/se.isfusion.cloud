@@ -59,20 +59,24 @@ The project uses **Husky + lint-staged** for automatic pre-commit checks:
 ### What You Should Run Manually
 
 **Before every commit**, run:
+
 ```bash
 yarn pre-commit-check
 ```
 
 This will:
+
 - ✅ TypeScript type checking (`yarn typecheck`)
 - ✅ ESLint with zero warnings (`yarn lint:strict`)
 
 **Before pushing to main**, run:
+
 ```bash
 yarn test:all
 ```
 
 This will:
+
 - ✅ TypeScript type checking
 - ✅ ESLint with zero warnings
 - ✅ Production build test
