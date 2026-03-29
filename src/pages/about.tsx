@@ -1,10 +1,10 @@
 import clsx from 'clsx';
+import Image from 'next/image';
 import * as React from 'react';
 
 import useLoaded from '@/hooks/useLoaded';
 
 import Accent from '@/components/Accent';
-import CloudinaryImg from '@/components/images/CloudinaryImg';
 import Layout from '@/components/layout/Layout';
 // import CustomLink from '@/components/links/CustomLink';
 import Seo from '@/components/Seo';
@@ -30,22 +30,16 @@ export default function AboutPage() {
               <Accent>Jeff Fan</Accent>
             </h1>
             <div className='mt-4' data-fade='2'>
-              {/* <CloudinaryImg
-                className='float-right ml-6 w-36 md:w-72'
-                publicId='v1660493139/personal-site/jeff-dim-sum'
-                width='2890'
-                height='2890'
-                alt='Jeff Fan'
-                preview={true}
-              /> */}
-              <CloudinaryImg
-                className='float-right ml-6 w-36 md:w-72'
-                publicId='v1660493139/personal-site/jeff-101-square'
-                width='3072'
-                height='3072'
-                alt='Jeff Fan'
-                preview={true}
-              />
+              <div className='float-right ml-6 w-36 overflow-hidden rounded shadow dark:shadow-none md:w-72'>
+                <Image
+                  src='https://res.cloudinary.com/iambigmomma/image/upload/v1660493139/personal-site/jeff-101-square'
+                  alt='Jeff Fan'
+                  width={400}
+                  height={400}
+                  priority
+                  className='h-auto w-full'
+                />
+              </div>
               <article className='prose dark:prose-invert'>
                 <p data-fade='3'>Hey there👋</p>
                 <p data-fade='4'>

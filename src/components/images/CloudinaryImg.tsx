@@ -101,7 +101,10 @@ export default function CloudinaryImg({
             background-size: 100%;
           }
         `}</style>
-        <div className='absolute top-0 left-0'>
+        <div
+          className='absolute top-0 left-0'
+          style={{ zIndex: 10, position: 'relative' }}
+        >
           <Image
             width={width}
             height={height}
