@@ -86,22 +86,20 @@ export default function CloudinaryImg({
             : `${(+height / +width) * 100}%`,
           cursor: preview ? 'zoom-in' : 'default',
         }}
-        className='img-blur'
         onClick={preview ? () => setIsOpen(true) : undefined}
       >
-        <style jsx>{`
-          .img-blur::before {
-            content: '';
-            position: absolute;
-            inset: 0;
-            filter: blur(20px);
-            z-index: 0;
-            background-image: url(${urlBlurred});
-            background-position: center center;
-            background-size: 100%;
-          }
-        `}</style>
-        <div className='absolute inset-0' style={{ zIndex: 1 }}>
+        {/* Blur placeholder — first in DOM, painted behind the image */}
+        <div
+          className='absolute inset-0'
+          style={{
+            backgroundImage: `url(${urlBlurred})`,
+            backgroundPosition: 'center center',
+            backgroundSize: '100%',
+            filter: 'blur(20px)',
+          }}
+        />
+        {/* Clear image — later in DOM, naturally painted on top */}
+        <div className='absolute inset-0'>
           <Image
             layout='fill'
             objectFit='cover'
