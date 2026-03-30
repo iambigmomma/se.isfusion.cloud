@@ -101,10 +101,10 @@ export default function CloudinaryImg({
             background-size: 100%;
           }
         `}</style>
-        <div className='absolute top-0 left-0' style={{ zIndex: 1 }}>
+        <div className='absolute inset-0' style={{ zIndex: 1 }}>
           <Image
-            width={width}
-            height={height}
+            layout='fill'
+            objectFit='cover'
             src={url}
             alt={alt}
             title={title || alt}
