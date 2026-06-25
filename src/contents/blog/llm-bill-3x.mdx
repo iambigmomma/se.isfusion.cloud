@@ -18,6 +18,8 @@ This story, [documented in a public analysis of 60+ LLM models](https://dev.to/k
 
 This article walks through exactly why that happens — and gives you a concrete framework for closing the gap.
 
+> **A note on pricing:** All token prices in this article were correct at the time of writing (June 2026), but LLM pricing changes frequently — providers cut rates, add tiers, and rename models often, so the numbers may already be out of date by the time you read this. Treat every figure here as illustrative of the _pattern_, not a live quote; always check the provider's official pricing page before budgeting.
+
 ### Key Takeaways
 
 - The advertised input-token price is a floor, not a ceiling — real production bills routinely run 2–3× higher because of five compounding multipliers.
@@ -167,7 +169,7 @@ Most providers offer negotiated discounts at $50K+/month spend. Many teams that 
 
 **4. Model right-sizing — often 3–10× cost reduction**
 
-The biggest single lever is routing simple requests to smaller, cheaper models. Claude Haiku 4.5 costs $0.25/M input; Claude Sonnet 4.6 costs $3.00/M — a 12× price difference. For tasks where Haiku produces equivalent quality (classification, summarization, FAQ responses from retrieved context), running Sonnet is waste.
+The biggest single lever is routing simple requests to smaller, cheaper models. Claude Haiku 4.5 costs $1.00/M input; Claude Sonnet 4.6 costs $3.00/M — a 3× price difference, and if a capable open-weight model clears your accuracy floor, the gap widens to 10×+. For tasks where a smaller model produces equivalent quality (classification, summarization, FAQ responses from retrieved context), running Sonnet is waste.
 
 The challenge is operationalizing this routing in a way that doesn't require maintaining custom routing logic. The architecture for doing this without building it yourself is covered in [Article 5 of this series](/blog/multi-provider-routing).
 
