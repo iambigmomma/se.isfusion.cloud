@@ -1,0 +1,281 @@
+---
+title: 'Stable Diffusion 輕鬆上手：在 DigitalOcean GPU Droplets 開始'
+publishedAt: '2024-09-30'
+description: '在 DigitalOcean GPU Droplet 上跑 Stable Diffusion，取得生成影像所需的運算力。本文用 AUTOMATIC1111 的 Stable Diffusion WebUI 帶你一步步設定，並教你撰寫正向／負向提示詞、使用 txt2img 產生你的第一張生成式 AI 影像。'
+banner: 'do-stable-diffusion'
+tags: 'cloud, GPU, ,generative-art, AI, diffusion'
+---
+
+## 前言
+
+Stable Diffusion 是強大的 AI 生圖工具，但相當吃資源。把它跑在 DigitalOcean GPU Droplet 上，就能取得你需要的運算力。本文會用 [AUTOMATIC1111 的 Stable Diffusion WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui) 教你怎麼設定。我們把流程簡化過了，就算你不是技術高手也別擔心——跟著做就對了！
+
+## 事前準備
+
+- 一個 [DigitalOcean Cloud 帳號](https://cloud.digitalocean.com/)。
+- 一台 [GPU Droplet](https://www.digitalocean.com/products/gpu-droplets)。GPU Droplet 目前處於早期供應階段，你可以[在這裡申請存取權](https://cloud.digitalocean.com/account/feature-preview?feature=droplet_gpu_sizes_available)。
+- 熟悉 Linux 命令列。想了解更多，可以看這篇 [Linux command line primer](https://www.digitalocean.com/community/tutorials/a-linux-command-line-primer) 指南。
+- 已安裝 Git 與 Python 3.10。
+
+## 為什麼要用 GPU Droplet？
+
+Stable Diffusion 技術上可以跑在 CPU 上，但很慢。跑在 GPU 上能大幅提升效能——DigitalOcean 的 GPU Droplet 是可隨需開通的 NVIDIA H100，今天就[開一台 GPU Droplet](https://cloud.digitalocean.com/account/feature-preview?feature=droplet_gpu_sizes_available) 試試看。注意目前處於早期供應階段，很快會對所有人開放！
+
+## 步驟 1－設定 GPU Droplet
+
+1. **建立 GPU Droplet**  
+   登入你的 DigitalOcean 帳號，建立一台新的 Droplet，選一個含 GPU 的方案。基本的 GPU 方案就足以應付生圖需求。
+
+2. **新增一個使用者（建議）**  
+   基於安全考量，與其所有事情都用 root，不如建立一個新使用者：
+
+```bash
+adduser do-shark
+usermod -aG sudo do-shark
+su do-shark
+cd ~/
+```
+
+## 步驟 2－安裝相依套件
+
+登入後，更新 Droplet 並安裝必要工具：
+
+```bash
+sudo apt update
+sudo apt install -y wget git python3 python3-venv
+```
+
+## 步驟 3－Clone Stable Diffusion 儲存庫
+
+從 GitHub clone [這個](https://github.com/AUTOMATIC1111/stable-diffusion-webui.git)儲存庫：
+
+```bash
+git clone https://github.com/AUTOMATIC1111/stable-diffusion-webui.git
+cd stable-diffusion-webui
+```
+
+## 步驟 4－設定並執行 Stable Diffusion
+
+### 建立 Python 虛擬環境
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 重新編譯支援 CUDA 的 xFormers
+
+要用到 GPU 加速，你需要重新編譯支援 CUDA 的 xFormers。這一步能確保你的環境針對效能做了優化：
+
+```bash
+pip uninstall xformers
+pip install xformers --extra-index-url https://download.pytorch.org/whl/nightly/cu118
+```
+
+### 選用：用 `gpustat` 監控 GPU 使用率
+
+如果你想在跑 Stable Diffusion 時監控 GPU 使用率，可以用一個叫 `gpustat` 的工具。它會即時提供你的 GPU 使用資訊，包括記憶體、溫度與目前負載。
+
+安裝與使用 `gpustat` 的步驟如下：
+
+用 `pip` 安裝 `gpustat`：
+
+```bash
+pip install gpustat
+```
+
+安裝完成後，在另一個終端機執行以下指令即可監控 GPU 使用率：
+
+```bash
+gpustat --color -i 1
+```
+
+![gpustat](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/gpustat.png)
+
+### 選用：從直接連結安裝模型
+
+如果你有模型的下載連結，可以用 wget 指令輕鬆安裝。以下示範怎麼下載並安裝 SDXL 模型：
+
+```bash
+wget -O models/Stable-diffusion/stable-diffusion-xl.safetensors "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors"
+```
+
+這個指令會下載 SDXL 模型，存到 `models/Stable-diffusion/ directory`，檔名為 `stable-diffusion-xl.safetensors`。下載完成後，模型就能在你的 Stable Diffusion 環境中使用了。
+
+### 執行 WebUI
+
+現在該啟動 Stable Diffusion WebUI 了。執行以下指令，以 Gradio sharing、xFormers GPU 加速、開放不安全的擴充套件存取與 API 存取來啟動介面：
+
+```bash
+./webui.sh --share --xformers --api --enable-insecure-extension-access
+```
+
+WebUI 跑起來後，打開瀏覽器前往 `https://[HASHING].gradio.live` 存取介面。注意這個連結會在 72 小時後失效。
+
+![sd-portal](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/sd-portal.png)
+
+## 使用 CivitAI Browser 擴充套件安裝模型
+
+執行 `web-ui.sh` 腳本後，可以照下列步驟透過 CivitAI Browser 擴充套件安裝模型：
+
+1. 到 WebUI 的 **"Extensions"** 分頁。
+2. 進入 **"Available"** 子分頁。
+3. 點橘色的 **"Load from"** 按鈕，從儲存庫載入可用的擴充套件。
+4. 在搜尋列輸入 **"CivitAI Browser+"**，點 **Install** 按鈕。
+   ![extensions](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/extensions.png)
+5. 安裝完成後，到 **"Installed"** 子分頁。
+6. 點 **Apply and restart UI** 啟用擴充套件。
+
+   ![civitai-browser](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/civitai-browser.png)
+
+7. 按下重啟按鈕後，由於重新啟動，你的 console 可能會看似停在 "Reloading"。點終端機裡出現的新 `https://[HASHING].gradio.live` 連結即可。
+
+WebUI 重啟後，你會看到一個新分頁叫 **"CivitAI Browser+"**。這個擴充套件讓你能直接從 CivitAI 搜尋並安裝模型。
+
+在這個示範中，我們在 CivitAI Browser+ 分頁裡搜尋 **"Western Animation"** 並安裝它。選那個縮圖是 **Superman** 的模型。我們會在速成教學的下一部分用這個模型，透過文字生圖（txt2img）來產生影像。
+![western-animation](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/western-animation.png)
+
+## 你的第一張生成式 AI 藝術作品：Stable Diffusion 提示詞撰寫教學
+
+Stable Diffusion 是強大的 AI 生圖工具，透過正向提示詞（positive prompts）與負向提示詞（negative prompts）引導 AI 產生特定影像。這個教學會示範怎麼撰寫與海洋生物相關的提示詞，以及如何用負向提示詞在 Stable Diffusion WebUI 中提升影像品質。
+
+## 如何撰寫提示詞
+
+提示詞是生成影像的核心。正向提示詞告訴 AI 你想看到什麼，負向提示詞則幫你排除不想要的元素。以下用海洋生物相關的例子示範怎麼寫提示詞。
+
+### 1. 撰寫正向提示詞
+
+撰寫提示詞時，用英文描述你想生成的內容。你可以用簡單句子，或用逗號分隔的關鍵字來描述特徵。以下是一些海洋生物相關的例子：
+
+1. **生成一隻海龜游過珊瑚礁**：
+
+   ```text
+   a sea turtle swimming over a coral reef
+   ```
+
+   或簡化成關鍵字：
+
+   ```text
+   sea turtle, swimming, coral reef, ocean
+   ```
+
+   ![sea-tutle](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/sea-turtle.png)
+
+2. **生成一群色彩繽紛的魚**：
+
+   ```text
+   colorful fish, swimming in the ocean, school of fish, tropical fish
+   ```
+
+   ![colorful-fish-tutle](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/colorful-fish.png)
+
+#### 2. 使用負向提示詞
+
+負向提示詞很適合用來排除不想要的元素，尤其是在一次生成多張影像時。以下是一些常見的負向提示詞，用來避免低品質或錯誤的結果：
+
+```text
+lowres, bad anatomy, blurry, text, error, cropped, worst quality, jpeg artifacts, watermark, signature, low quality, worst quality
+```
+
+你也可以加上特定不想出現在海洋生物影像裡的元素，例如人物或建築物：
+
+```text
+nsfw, weapon, blood, human, car, city, building
+```
+
+### 如何在 Stable Diffusion 使用 txt2image
+
+Stable Diffusion WebUI 的 txt2image 功能，讓你能依你撰寫的提示詞生成影像。用法如下：
+
+1. **輸入正向與負向提示詞**：
+   在左邊的文字框輸入海洋生物相關的提示詞，例如：
+
+   ```text
+   colorful fish, coral reef, underwater, ocean, vibrant colors
+   ```
+
+   負向提示詞則排除不想要的元素：
+
+   ```text
+   lowres, bad anatomy, text, blurry, weapon, human
+   ```
+
+2. **選擇取樣方法（Sampling Method）**：
+   取樣方法可以試 "DPM++ 2M SDE Heun" 或 "Euler a"。
+
+3. **設定影像尺寸與步數**：
+   把寬與高設為 1024x512、取樣步數設為 30。你也可以勾選 "Hires. fix" 用預設值來提升影像細節，這對海洋生物影像也可能有幫助。
+
+4. **生成影像**：
+   點右上角的 "Generate" 按鈕開始生圖。完成後，你可以視需要儲存或調整影像。
+
+   ![colorful-fish-tutle](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/colorful-fish-coral.png)
+
+### 常用語法與擴充
+
+Stable Diffusion WebUI 提供不同語法來提升生圖的精準度。以下是一些好用的：
+
+- **注意力／強調（Attention/Emphasis）**：用括號 `( )` 強調提示詞中的某些元素。例如要突顯海豚的顏色：
+
+  ```text
+  dolphin, ((blue)), ocean, swimming
+  ```
+
+  ![blue-dolphin](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/blue-dolphin.png)
+
+- **提示詞切換（Prompt Switching）**：你可以在生成過程中用這個語法切換提示詞：
+
+  ```text
+  [shark : whale : 10] swimming in the ocean
+  ```
+
+  ![shark-whale](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/shark-whale.png)
+
+### 範例提示詞
+
+1. **生成一隻水下的章魚**：
+
+   ```text
+   octopus, underwater, ocean, coral reef, vibrant colors
+   ```
+
+   負向提示詞：
+
+   ```text
+   lowres, blurry, bad anatomy, text, human
+   ```
+
+   ![octopus](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/octopus.png)
+
+2. **生成一隻躍出水面的海豚**：
+
+   ```text
+   dolphin, jumping out of the water, ocean, sunset, splash, realistic
+   ```
+
+   負向提示詞：
+
+   ```text
+   lowres, bad anatomy, blurry, text, car, building
+   ```
+
+   ![dolphin-jump](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/dolphin-jump.png)
+
+3. **生成一隻在深水中游動的鯊魚**：
+
+   ```text
+   shark, swimming, deep ocean, dark blue water, scary, realistic
+   ```
+
+   負向提示詞：
+
+   ```text
+   lowres, bad anatomy, blurry, text, human, building
+   ```
+
+   ![shark-swimming](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/Stable-Diffusion-GPU-Droplet/shark-swimming.png)
+
+## 結論
+
+這只是你用 Stable Diffusion 在 DigitalOcean [GPU Droplets](https://www.digitalocean.com/products/gpu-droplets) 上創作生成式 AI 藝術之旅的開端。在接下來的系列裡，我們會更深入探討如何在 GPU 上以 [DigitalOcean Kubernetes](https://www.digitalocean.com/products/kubernetes) 運行容器化的 Stable Diffusion API，並結合其他 DigitalOcean 產品探索實際應用場景。敬請期待更多精彩的內容與教學！

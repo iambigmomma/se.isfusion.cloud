@@ -1,0 +1,527 @@
+---
+title: '在 DigitalOcean Kubernetes 上部署 llm-d 打造分散式 LLM 推論'
+publishedAt: '2025-07-15'
+description: >-
+  帶你在 DigitalOcean Kubernetes（DOKS）上部署 llm-d，搭配 GPU 打造分散式 LLM 推論服務。本教學涵蓋自動化叢集建置、llm-d 部署與基本測試，讓你快速上手可用於正式環境的分散式 LLM 服務。
+banner: 'llm-d-doks-deploy'
+tags: 'kubernetes, gpu, llm, inference, digitalocean'
+---
+
+# 在 DigitalOcean Kubernetes 上部署 llm-d 打造分散式 LLM 推論
+
+本教學會帶你透過我們的自動化部署腳本，在 DigitalOcean Kubernetes 上部署 llm-d。不論你是 DevOps 工程師、ML 工程師，還是平台架構師，這份指南都能協助你在 Kubernetes 上建立一套分散式 LLM 推論服務。
+
+**⏱️ 預估部署時間：15-20 分鐘**
+
+**📋 教學範圍：本教學著重在透過自動化腳本，於 DigitalOcean Kubernetes 上完成基本的 llm-d 部署。**
+
+---
+
+## 概觀
+
+[**llm-d**](https://llm-d.ai/) 是一套專為 Kubernetes 環境設計的分散式 LLM 推論框架，具備分離式（disaggregated）服務架構與智慧資源管理。在 DigitalOcean Kubernetes 上，你可以透過部署 llm-d 達成：
+
+1. **分離式 LLM 推論**  
+   把 prefill（上下文處理）與 decode（token 生成）兩個階段拆分到不同的 GPU 節點上執行。
+
+2. **GPU 資源管理**  
+   自動配置 GPU 資源，支援 NVIDIA RTX 4000 Ada、RTX 6000 Ada 與 L40S 顯示卡。
+
+3. **Kubernetes 原生架構**  
+   雲原生設計，具備完善的服務探索（service discovery）與資源管理。
+
+---
+
+## 什麼是 llm-d？
+
+**llm-d** 是新一代的分散式 LLM 推論平台，專為 Kubernetes 環境打造。與傳統單節點方案不同，llm-d 把分散式運算的能力帶進了 LLM 推論。
+![llm-d architecture](https://res.cloudinary.com/iambigmomma/image/upload/v1752497883/blog/deploy-llm-d-on-doks/architecture.svg)
+
+### 認識分離式 LLM 推論
+
+不妨想像一下「快時尚零售」與「訂製西服」之間的差別——這正好貼切地說明了傳統網頁應用與 LLM 推論之間的本質不同：
+
+**傳統網頁應用 vs. LLM 推論：**
+
+| 比較面向                  | 傳統網頁應用（快時尚）                            | LLM 推論（訂製西服工坊）                          |
+| ------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------- |
+| **服務流程**              | 店裡陳列 S·M·L 標準尺寸，客人拿了就結帳          | 量身 → 打版 → 試穿 → 修改 → 交件                |
+| **請求生命週期**          | 毫秒到數秒（瞬間結帳）                            | 數秒到數分鐘（一針一線慢慢做）                   |
+| **資源需求**              | 每件用料與製作時間都差不多                        | 每套西服的用料與手工時間差異極大                 |
+| **狀態性**                | 店員不會記得你之前買過什麼                        | 師傅記得你的尺寸與偏好                           |
+| **成本**                  | 單價低、大量生產                                  | 單價高、精工細作                                 |
+
+![fast-fashion-vs-beskpoke](https://res.cloudinary.com/iambigmomma/image/upload/v1752508698/blog/deploy-llm-d-on-doks/beskpoke-vs-fast-fashion.png)
+**傳統 LLM 服務 =「一人包辦所有工序的裁縫」**
+
+這種做法會遇到的問題：
+
+- **資源分配不均**：有些客人只需要簡單改個褲腳，有些客人卻要全套訂製西服——工作量差距極大
+- **布料浪費**：每位客人各自佔用一堆布料，剩布無法共用
+- **排隊卡關**：前面的複雜訂單塞住了後面只是要小改的快單
+
+**llm-d 的分離式做法 =「現代化訂製西服生產線」**
+
+| 工作站              | 流程比喻                          | 專門化優化                                          |
+| ------------------- | --------------------------------- | --------------------------------------------------- |
+| **Prefill 站**      | 量身 + 打版室                     | 高度平行運算，CPU/GPU 協同                          |
+| **Decode 站**       | 縫紉室                            | 專注於循序輸出，追求最大記憶體頻寬                  |
+| **智慧 Gateway**    | 首席裁縫調度主管                  | 依 KV Cache 與負載動態分派訂單                      |
+
+**帶來的好處：**
+
+1. **布料（KV Cache）共用**：把版型相近的訂單集中處理，提高命中率
+2. **請求形態優化**：改褲腳走快速通道、正式服裝走慢工通道——各走各的路
+3. **獨立擴充**：量身旺季就多加幾位打版師，交件旺季就多加幾位縫紉師
+4. **GPU 記憶體效率**：量身階段需要「重運算、輕記憶體」，縫紉階段則相反——拆開後各取所需
+
+**一句話總結**：快時尚講究「拿了就走」，訂製西服追求「量身合身」。llm-d 把量身與縫紉分開，再加上智慧首席裁縫居中調度，讓 AI 推論既能個人化又有效率。
+
+---
+
+## 教學步驟
+
+## 步驟 1：複製儲存庫並設定環境
+
+首先，取得 llm-d deployer 儲存庫並設定我們的環境：
+
+```bash
+# Clone the llm-d deployer repository
+git clone https://github.com/iambigmomma/llm-d-deployer.git
+cd llm-d-deployer/quickstart/infra/doks-digitalocean
+```
+
+### 事前準備
+
+- 已啟用 GPU 額度（quota）的 DigitalOcean 帳號
+- 已安裝並完成認證的 `doctl` CLI
+- 已安裝 `kubectl`
+- 已安裝 `helm`
+
+### 設定必要的環境變數
+
+```bash
+# Set your HuggingFace token (required for model downloads)
+export HF_TOKEN=hf_your_token_here
+
+# Verify doctl is authenticated
+doctl auth list
+```
+
+### 🔐 重要：模型存取權限需求
+
+**關於 Meta Llama 模型（Llama-3.2-3B-Instruct）：**
+
+本教學使用的 `meta-llama/Llama-3.2-3B-Instruct` 模型需要額外申請存取權限：
+
+1. **需要 HuggingFace 帳號**：你必須擁有一個 HuggingFace 帳號
+2. **申請模型存取權**：前往 [Llama-3.2-3B-Instruct on HuggingFace](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct)
+3. **接受授權條款**：點選「Agree and access repository」並完成授權同意流程
+4. **等待審核通過**：存取權限通常會在幾小時內核准
+5. **產生存取權杖**：在你的 [Settings > Access Tokens](https://huggingface.co/settings/tokens) 建立一組具有「Read」權限的 HuggingFace access token
+   ![HF-meta-llama-repo](https://res.cloudinary.com/iambigmomma/image/upload/v1752497883/blog/deploy-llm-d-on-doks/hf-meta-llama-access-request.png)
+
+**替代的開放模型（免授權申請）：**
+
+如果你想避開審核流程，可以考慮以下這些開放的替代模型：
+
+- `google/gemma-2b-it` - Google 開放的指令微調（instruction-tuned）模型
+- `Qwen/Qwen2.5-3B-Instruct` - 阿里巴巴的多語言模型
+- `microsoft/Phi-3-mini-4k-instruct` - Microsoft 高效率的小型模型
+
+若要改用替代模型，你需要對應修改部署設定檔。
+
+## 步驟 2：建立含 GPU 節點的 DOKS 叢集
+
+我們的自動化腳本會建立一套同時包含 CPU 與 GPU 節點的完整 DOKS 叢集：
+
+```bash
+# Run the automated cluster setup script
+./setup-gpu-cluster.sh -c
+```
+
+這個腳本會：
+
+1. 建立一個含 CPU 節點的全新 DOKS 叢集
+2. 依你選擇的 GPU 類型加入一個 GPU 節點池
+3. 安裝 NVIDIA Device Plugin 以支援 GPU
+4. 設定妥當的節點標籤與 GPU 資源管理
+
+### 選擇你的 GPU 類型
+
+出現提示時，選擇你偏好的 GPU 類型：
+
+- **RTX 4000 Ada**：適合較小的模型（7B-13B 參數），CP 值高
+- **RTX 6000 Ada**：效能均衡，適合中型模型（13B-34B 參數）
+- **L40S**：效能最強，適合大型模型（70B 以上參數）
+
+![setup-gpu-doks](https://res.cloudinary.com/iambigmomma/image/upload/v1752497883/blog/deploy-llm-d-on-doks/setup-doks-gpu-cluster.png)
+
+### 驗證叢集是否建置完成
+
+```bash
+# Check cluster status
+kubectl get nodes
+
+# Verify GPU nodes are ready
+kubectl get nodes -l doks.digitalocean.com/gpu-brand=nvidia
+
+# Check GPU resources are available
+kubectl describe nodes -l doks.digitalocean.com/gpu-brand=nvidia | grep nvidia.com/gpu
+```
+
+你應該會看到類似以下的輸出：
+
+```bash
+NAME                   STATUS   ROLES    AGE   VERSION
+pool-gpu-xxxxx         Ready    <none>   3m    v1.31.1
+pool-gpu-yyyyy         Ready    <none>   3m    v1.31.1
+```
+
+### 🔄 如果建置腳本意外中斷
+
+**這完全是正常現象！** 在節點佈建（provisioning）過程中，DigitalOcean 的 API 呼叫偶爾會逾時。如果你看到腳本在建立 GPU 節點池之後停了下來：
+
+1. **等待 30 秒**，讓 API 作業完成
+2. **重新執行同一個指令**：
+   ```bash
+   ./setup-gpu-cluster.sh
+   ```
+3. **腳本會自動偵測既有的元件**，並從中斷處接著往下執行
+4. **不會建立重複的資源**——這個腳本本來就設計成可以安全地重跑
+
+腳本具備智慧的狀態偵測，會自動略過已完成的步驟，因此重複執行多次都很安全。
+
+## 步驟 3：部署 llm-d 基礎架構
+
+接下來，我們透過自動化部署腳本來部署 llm-d。為了提高可靠度並方便排除問題，這是一個分兩步的流程：
+
+### 步驟 3A：部署 llm-d 核心元件
+
+首先，部署 llm-d 的核心推論服務：
+
+```bash
+# Deploy llm-d with your chosen GPU configuration
+./deploy-llm-d.sh -g rtx-6000-ada -t your_hf_token
+```
+
+**會部署哪些元件：**
+
+- **Prefill Service**：在 GPU pod 上負責上下文處理
+- **Decode Service**：搭配 GPU 優化，負責 token 生成
+- **Gateway Service**：負責路由請求並處理負載平衡
+- **Redis Service**：提供 KV cache 儲存
+
+### 步驟 3B：設定監控（選用）
+
+在 llm-d 順利運作後，你可以選擇性地建立一套完整的監控：
+
+```bash
+# Navigate to monitoring directory
+cd monitoring
+
+# Setup Prometheus, Grafana, and llm-d dashboards
+./setup-monitoring.sh
+```
+
+**監控元件：**
+
+- **Prometheus**：指標收集與儲存
+- **Grafana**：視覺化儀表板與警示
+- **llm-d Dashboard**：自訂的推論效能儀表板
+- **ServiceMonitor**：自動探索 llm-d 指標
+
+### 監看部署進度
+
+```bash
+# Watch llm-d deployment progress
+kubectl get pods -n llm-d -w
+
+# Check all components are running
+kubectl get all -n llm-d
+```
+
+等到所有 pod 都顯示 `Running` 狀態為止：
+
+```bash
+NAME                                           READY   STATUS    RESTARTS   AGE
+meta-llama-llama-3-2-3b-instruct-decode-xxx    1/1     Running   0          3m
+meta-llama-llama-3-2-3b-instruct-prefill-xxx   1/1     Running   0          3m
+llm-d-inference-gateway-xxx                    1/1     Running   0          3m
+redis-xxx                                      1/1     Running   0          3m
+```
+
+### 監看監控建置進度（若已完成步驟 3B）
+
+```bash
+# Check monitoring stack status
+kubectl get pods -n llm-d-monitoring
+
+# Access Grafana dashboard
+kubectl port-forward -n llm-d-monitoring svc/prometheus-grafana 3000:80
+```
+
+## 步驟 4：測試你的 llm-d 部署
+
+接著，我們用測試腳本來確認一切運作正常：
+
+```bash
+# Navigate to the test directory
+cd /path/to/llm-d-deployer/quickstart
+
+# Run the automated test
+./test-request.sh
+```
+
+![test-request](https://res.cloudinary.com/iambigmomma/image/upload/v1752499780/blog/deploy-llm-d-on-doks/test-request.png)
+
+### 手動測試（替代做法）
+
+如果你偏好手動測試：
+
+```bash
+# Port-forward to the gateway service
+kubectl port-forward -n llm-d svc/llm-d-inference-gateway-istio 8080:80 &
+
+# Test the API with a simple request
+curl localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.2-3B-Instruct",
+    "messages": [
+      {"role": "user", "content": "Explain Kubernetes in simple terms"}
+    ],
+    "max_tokens": 150,
+    "stream": false
+  }' | jq
+```
+
+### 預期回應
+
+你應該會看到類似以下這樣成功的 JSON 回應：
+
+```json
+{
+  "choices": [
+    {
+      "finish_reason": "length",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Kubernetes (also known as K8s) is an open-source container orchestration system for automating the deployment, scaling, and management of containerized applications...",
+        "reasoning_content": null,
+        "role": "assistant",
+        "tool_calls": []
+      },
+      "stop_reason": null
+    }
+  ],
+  "created": 1752523066,
+  "id": "chatcmpl-76c2a86b-5460-4752-9f20-03c67ca5b0ba",
+  "kv_transfer_params": null,
+  "model": "meta-llama/Llama-3.2-3B-Instruct",
+  "object": "chat.completion",
+  "prompt_logprobs": null,
+  "usage": {
+    "completion_tokens": 150,
+    "prompt_tokens": 41,
+    "prompt_tokens_details": null,
+    "total_tokens": 191
+  }
+}
+```
+
+## 步驟 5：存取監控與儀表板
+
+如果你完成了步驟 3B（監控建置），就可以存取這套完整的監控儀表板：
+
+```bash
+# Port-forward to Grafana
+kubectl port-forward -n llm-d-monitoring svc/prometheus-grafana 3000:80
+
+# Get admin password
+kubectl get secret prometheus-grafana -n llm-d-monitoring -o jsonpath="{.data.admin-password}" | base64 -d
+```
+
+**Grafana 存取網址**：http://localhost:3000  
+**帳號**：admin  
+**密碼**：（由上方指令取得）
+![monitoring-dashboard](https://res.cloudinary.com/iambigmomma/image/upload/v1752501545/blog/deploy-llm-d-on-doks/monitoring-dashboard.png)
+
+### llm-d 儀表板與關鍵指標
+
+完成監控建置後，你會找到：
+
+- **儀表板位置**：在 Grafana 中尋找「llm-d」資料夾
+- **儀表板名稱**：「llm-d Inference Gateway」
+
+儀表板可能需要 1-2 分鐘才會出現，因為它是由 Grafana 的 sidecar 載入的。
+
+#### 📊 值得關注的重要指標
+
+**請求效能指標：**
+
+- **Time to First Token（TTFT）**：對使用者體驗至關重要——衡量第一個回應 token 生成的速度有多快
+- **Inter-Token Latency（ITL）**：後續 token 生成的速度——會影響使用者感受到的回應流暢度
+- **Requests per Second（RPS）**：整體系統的吞吐量
+- **Request Duration**：端對端的請求完成時間
+
+**資源使用率指標：**
+
+- **GPU Memory Usage**：監看 prefill 與 decode pod 的 GPU 記憶體用量
+- **GPU Utilization**：GPU 實際的運算使用率百分比
+- **KV Cache Hit Rate**：受惠於快取運算結果的請求比例
+- **Queue Depth**：等待處理的待處理請求數量
+
+**llm-d 專屬指標：**
+
+- **Prefill vs Decode Load Distribution**：兩個處理階段之間的負載平衡
+- **Cache-Aware Routing Effectiveness**：智慧請求路由的成功率
+- **Model Loading Time**：把模型載入 GPU 記憶體所需的時間
+- **Token Generation Rate**：每張 GPU 每秒產生的 token 數
+
+**Kubernetes 指標：**
+
+- **Pod Autoscaling Events**：HPA 的擴縮決策與時機
+- **Node Resource Pressure**：節點上的 CPU、記憶體與 GPU 壓力
+- **Network Throughput**：分離式服務中 pod 之間的通訊量
+
+**效能優化指標：**
+
+- **Batch Size Utilization**：請求批次處理的效率如何
+- **Context Length Distribution**：了解典型的請求樣態
+- **Failed Request Rate**：錯誤率及其成因
+
+這些指標能幫助你：
+
+- **優化效能**：找出 prefill 與 decode 階段的瓶頸
+- **資源適配**：依實際使用量在成本與效能之間取得平衡
+- **排除問題**：快速定位特定元件的問題
+- **容量規劃**：依流量樣態預測未來的資源需求
+
+---
+
+## 常見問題與解法
+
+### 建置腳本在建立 GPU 節點池後停止
+
+**症狀**：腳本在「GPU node pool created successfully」之後就中止
+**原因**：節點佈建期間 DigitalOcean API 回應延遲（這是正常的！）
+**解法**：
+
+```bash
+# Wait 30 seconds, then re-run the script
+./setup-gpu-cluster.sh
+
+# The script will automatically continue from where it left off
+# No duplicate resources will be created
+```
+
+### GPU Pod 排程問題
+
+**症狀**：Pod 卡在 `Pending` 狀態
+**解法**：檢查 GPU 節點的可用性與資源請求
+
+```bash
+kubectl describe pods -n llm-d | grep -A 5 "Events:"
+```
+
+### 模型下載失敗
+
+**症狀**：Pod 出現下載錯誤
+**解法**：確認 HF_TOKEN 是否設定正確
+
+```bash
+kubectl logs -n llm-d -l app=decode
+```
+
+### 服務連線問題
+
+**症狀**：API 請求失敗
+**解法**：檢查所有 pod 是否都在運作、服務是否都可用
+
+```bash
+kubectl get pods -n llm-d
+kubectl get svc -n llm-d
+```
+
+### 儀表板沒有出現在 Grafana
+
+**症狀**：執行監控建置後，llm-d 儀表板在 Grafana 中看不到
+**解法**：檢查儀表板的 ConfigMap 與 Grafana sidecar
+
+```bash
+# Check if dashboard ConfigMap exists
+kubectl get configmap llm-d-dashboard -n llm-d-monitoring
+
+# Check ConfigMap labels
+kubectl get configmap llm-d-dashboard -n llm-d-monitoring -o yaml | grep grafana_dashboard
+
+# If missing, re-run monitoring setup
+cd monitoring && ./setup-monitoring.sh
+```
+
+---
+
+## 下一步
+
+恭喜！你已經在 DigitalOcean Kubernetes 上擁有一套可運作的 llm-d 部署。你的部署包含：
+
+✅ **DOKS 叢集**：CPU 與 GPU 節點都已妥善設定  
+✅ **llm-d 服務**：prefill、decode、gateway 與 Redis 均正常運作  
+✅ **GPU 支援**：已設定 NVIDIA Device Plugin 以進行 GPU 排程  
+✅ **可用的 API**：已測試並確認具備 LLM 推論能力
+
+### 接下來你可以做什麼
+
+- **擴充你的部署**：增加更多 GPU 節點，或提高 pod 副本數
+- **部署不同的模型**：使用不同的模型設定
+- **監控效能**：透過 Grafana 儀表板追蹤各項指標
+- **與應用整合**：在你的應用程式中使用相容於 OpenAI 的 API
+
+### 清除資源（選用）
+
+實驗結束後，你有兩種清除方式可選：
+
+#### 選項 1：只移除 llm-d 元件（保留叢集）
+
+如果你想保留 DOKS 叢集，只移除 llm-d 元件：
+
+```bash
+# Navigate back to the deployment directory
+cd /path/to/llm-d-deployer/quickstart/infra/doks-digitalocean
+
+# Remove llm-d components using the uninstall flag
+./deploy-llm-d.sh -u
+
+# Optionally remove monitoring (if installed)
+# kubectl delete namespace llm-d-monitoring
+```
+
+這會：
+
+- 移除所有 llm-d 的 pod 與服務
+- 刪除 llm-d 的 namespace
+- 保留監控元件（若是另外安裝的）
+- 保留你的 DOKS 叢集與 GPU 節點，方便日後繼續使用
+
+#### 選項 2：刪除整個叢集
+
+如果你想連叢集一起全部移除：
+
+```bash
+# Delete the cluster (this will remove all resources)
+doctl kubernetes cluster delete llm-d-cluster
+```
+
+**💡 小提醒**：如果你打算在同一個叢集上實驗不同的 llm-d 設定或其他 Kubernetes 工作負載，就選「選項 1」；如果所有實驗都已完成、想徹底清除，就選「選項 2」。
+
+---
+
+## 相關資源
+
+- **llm-d 文件**：[Official llm-d Docs](https://github.com/DigitalOcean/llm-d)
+- **DigitalOcean Kubernetes**：[DOKS Documentation](https://docs.digitalocean.com/products/kubernetes/)
+- **GPU Droplet 定價**：[DigitalOcean GPU Pricing](https://www.digitalocean.com/pricing/gpu)
+
+**祝你在 Kubernetes 上部署 llm-d 一切順利！** 🚀

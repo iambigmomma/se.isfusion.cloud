@@ -1,0 +1,123 @@
+---
+title: '在 DigitalOcean GPU Droplet 上部署 HuggingFace 生成式 AI 服務並整合 Open WebUI'
+publishedAt: '2024-10-25'
+description: '不用寫任何一行程式碼，就能在 DigitalOcean GPU Droplet 上用 HUGS 部署 LLM。搭配直覺的 Open WebUI，只要點幾下就能建立推論端點，打造類似 ChatGPT 的自訂服務。透過乾淨、好上手的介面直接連到你的 LLM，體驗建立與客製化 AI 服務的簡單。'
+banner: 'hugs-banner'
+tags: 'GPU,LLM,HuggingFace'
+---
+
+## 前言
+
+Hugging Face 的 Generative AI Services（HUGS）讓部署與管理 LLM 變得更快、更容易。現在透過 DigitalOcean 在 GPU Droplet 上的 HUGS 1-Click 部署，你可以在專為高效能打造的雲端基礎設施上設定、擴展並優化 LLM。本文帶你在 DigitalOcean GPU Droplet 上部署 HUGS、與 Open WebUI 整合，並說明為什麼這套組合很適合順暢、可擴展的 LLM 推論。
+
+## 事前準備
+
+- 一個可使用 GPU Droplet 的 [DigitalOcean 帳號](https://www.digitalocean.com/)
+- 熟悉 SSH 與基本的 Docker 指令
+- 一把用來登入 Droplet 的 SSH key
+
+---
+
+## 步驟 1：建立並存取你的 GPU Droplet
+
+1. **建立 Droplet**：  
+   前往 DigitalOcean 的 **Droplets** 頁面，用 **Hugging Face HUGS 1-Click Deployment** 選項建立一台新的 GPU Droplet。
+
+2. **開啟 Console**：  
+    Droplet 準備好後，在 **Droplets** 區塊點它的名稱，選擇 **Launch Web Console**。
+   ![web-console](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/hugs-gpu-droplet-open-webui/web-console)
+
+3. **記下 Message of the Day（MOTD）**：這裡面有 API 存取用的 bearer token 和推論端點——待會會用到。
+
+   ![bear-token](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/hugs-gpu-droplet-open-webui/bear-token)
+
+---
+
+## 步驟 2：啟動 Hugging Face HUGS
+
+Droplet 設定完成後，Hugging Face HUGS 會自動啟動。若要確認，檢查管理推論 API 的 Caddy 服務狀態：
+
+```bash
+sudo systemctl status caddy
+```
+
+請預留 **5–10 分鐘**讓模型完整載入。未來規劃中的更新會設法縮短這段暖機時間。
+
+---
+
+## 步驟 3：啟動 Open WebUI
+
+在**另一台 Droplet** 上用 Docker 啟動 [Open WebUI](https://openwebui.com/)：
+
+```bash
+docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main
+```
+
+Open WebUI 跑起來後，在 `http://<your_droplet_ip>:3000` 存取它。
+
+![1-sign-up-open-webui](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/hugs-gpu-droplet-open-webui/1-sign-up-open-webui)
+
+---
+
+## 步驟 4：將 HUGS 與 Open WebUI 整合
+
+要把 Open WebUI 連到 Hugging Face HUGS：
+
+1. **開啟 Settings**：
+
+   - 在 Open WebUI 左下角點你的**使用者圖示**，再點 **Settings**。
+
+2. **進入 Admin**：
+
+   - 切到 **Admin** 分頁，選擇 **Connections**。
+
+   ![2-endpoint-setting](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/hugs-gpu-droplet-open-webui/2-endpoint-setting)
+
+3. **設定推論端點**：
+
+   - 在 **API link 欄位**填入你 Droplet 的 IP，後面加上 `/v1`。若需要特定 port，也一併填入，例如 `http://<your_droplet_ip>/v1`。
+   - 用 MOTD 裡的 **API token** 做驗證。
+
+4. **驗證連線**：
+
+   - 點 **Verify Connection**。出現綠燈表示連線成功。接著 Open WebUI 會自動偵測可用的模型，例如 `hfhgus/Meta-Llama`。
+
+   ![3-model-discover](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/hugs-gpu-droplet-open-webui/3-model-discover)
+
+---
+
+## 步驟 5：開始與模型對話
+
+把 HUGS 整合進 Open WebUI 後，就可以開始跟你的 LLM 互動了：
+
+- **提問**，例如「What is DigitalOcean?」
+
+![testing-example](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/hugs-gpu-droplet-open-webui/testing-example)
+
+- 在追問下一個問題 `Does DigitalOcean offer object storage?` 的同時，**觀察容器的請求日誌**：
+
+```bash
+ sudo docker ps
+ sudo docker logs <your-container-ID> -f
+```
+
+![logging](https://res.cloudinary.com/iambigmomma/image/upload/v1685713949/blog/hugs-gpu-droplet-open-webui/logging)
+
+---
+
+## 結論
+
+把 HUGS 部署在 DigitalOcean GPU Droplet 上並搭配 Open WebUI，你就能有效率地管理、擴展並優化 LLM 推論。這套組合免去了硬體優化的煩惱，提供一個隨時可擴展的方案，能跨多個地區交付快速、可靠的回應。
+
+## 為什麼選擇在 DigitalOcean GPU Droplets 上跑 HUGS？
+
+1. **部署容易、管理簡化**  
+   用 DigitalOcean 的一鍵設定部署 HUGS 相當直接。不需要手動設定——DigitalOcean 與 Hugging Face 會處理好後端，讓你專注在擴展上。
+
+2. **大規模推論的效能優化**
+   在 DigitalOcean GPU 上跑 HUGS 能確保良好效能，不需手動調校就能在 GPU 硬體上有效率地運行 LLM。
+
+3. **可擴展性與彈性**
+   DigitalOcean 的基礎設施支援可擴展的部署，並以負載平衡器提供高可用性，讓你能以低延遲服務全球使用者。
+
+透過在 DigitalOcean GPU Droplet 上使用 Hugging Face HUGS，你不只獲得高效能的 LLM 推論，也擁有輕鬆擴展與管理部署的彈性。這種結合了優化硬體、可擴展性與簡單性的組合，讓 DigitalOcean 成為正式環境 AI 工作負載的絕佳選擇。

@@ -1,0 +1,559 @@
+---
+title: '在 DigitalOcean GPU Droplets 上部署 NVIDIA Dynamo，打造高效能 LLM 推論服務'
+publishedAt: '2025-06-09'
+description: >-
+  學習如何在 DigitalOcean GPU Droplets 上部署 NVIDIA Dynamo，實現高吞吐量的 LLM 推論，內容涵蓋容器建置、DOCR 整合與效能驗證。這篇教學會帶你從零開始，在雲端上打造分散式 LLM 推論服務，並透過實際範例驗證 Dynamo 的請求路由、排程與高吞吐量能力。
+banner: 'nvidia-dynamo-do-banner'
+tags: 'gpu, nvidia, llm, inference'
+---
+
+# 在 DigitalOcean GPU Droplets 上部署 NVIDIA Dynamo，打造高效能 LLM 推論服務
+
+這篇教學會帶你一步步在 DigitalOcean GPU Droplets 上部署 NVIDIA Dynamo，解決高效能 LLM 推論的挑戰並驗證其效能。就算你沒有深厚的 AI 或雲端背景，也能輕鬆上手。這篇教學非常適合想快速體驗分散式 LLM 推論的開發者與團隊。
+
+**⏱️ 預估部署時間：70-90 分鐘**
+
+**📋 教學範圍：本教學聚焦於單節點部署。NVIDIA Dynamo 同時支援多節點配置與 Kubernetes 部署選項，這些會在另外的進階教學中說明。**
+
+---
+
+## 總覽
+
+**NVIDIA Dynamo** 是一套為大規模生成式 AI 與推論模型設計的高效能、低延遲推論服務框架。在 DigitalOcean 上，你可以透過 GPU Droplets 部署 Dynamo，達成：
+
+1. **分散式 LLM 推論服務**  
+   運用解耦式（disaggregated）服務架構，將 prefill 與 decode 階段分配到不同 GPU 上，把資源利用率拉到最高。
+
+2. **智慧資源排程**  
+   透過 KV Cache 智慧路由與動態 GPU 排程，提升吞吐量並降低延遲。
+
+3. **高效能驗證**  
+   運用實際範例與測試工具，觀察平行推論的效能差異。
+
+---
+
+## 什麼是 vLLM？我們又為什麼需要 Dynamo？
+
+**[vLLM](https://docs.vllm.ai/en/latest/)** 是一套快速且易用的 LLM 推論與服務函式庫，最初由 UC Berkeley 的 Sky Computing Lab 開發。vLLM 的強項在於：
+
+- **PagedAttention**：高效管理注意力機制的 key 與 value 記憶體
+- **Continuous Batching**：動態批次處理進來的請求，換取更高的吞吐量
+- **優化過的 CUDA Kernels**：整合 FlashAttention 與 FlashInfer，加速模型執行
+- **相容 OpenAI 的 API**：可與現有應用程式順暢整合
+
+不過，vLLM 單獨使用時，在分散式場景與智慧請求路由上有其侷限，而這正是 NVIDIA Dynamo 提供編排與擴展能力之處。
+
+## 認識 KV Cache：高效 LLM 推論的基礎
+
+**[KV Cache（Key-Value Cache）](https://huggingface.co/blog/not-lain/kv-caching)** 是一項關鍵優化，它會儲存先前 token 已算好的 key-value 對，避免在文字生成過程中重複運算。
+
+### 主要好處：
+
+- **大幅加速**：把運算複雜度從 O(n²) 降到 O(n)
+- **記憶體與運算的取捨**：用 GPU 記憶體來快取數值，省下運算週期
+- **更好的擴展性**：即使序列長度增加，也能維持效能
+
+### 實際影響：
+
+- **基準測試結果**：較長序列的推論加速達 5.2 倍（61 秒 → 11.7 秒）
+- **正式環境應用**：對聊天機器人、程式碼生成與長篇內容創作不可或缺
+- **成本效益**：顯著降低 GPU 使用量與營運成本
+
+技術細節請參考[官方 KV caching 指南](https://huggingface.co/blog/not-lain/kv-caching)。
+
+---
+
+## 什麼是 NVIDIA Dynamo？用米其林餐廳的比喻來理解 LLM 推論框架
+
+想像你走進一家米其林星級餐廳。重點不只是擁有頂級主廚（就像 vLLM，一個高效能的推論引擎），還在於有一套完整的專業服務系統、點餐系統、客製化菜單設計，甚至能依據每位客人的口味偏好、過敏狀況與用餐時機，安排出最佳的上菜順序與體驗。
+![dynamo_components](https://res.cloudinary.com/iambigmomma/image/upload/v1749459375/blog/nvidia-dynamo-digitalocean-tutorial/dynamo_components.jpeg)
+
+- **vLLM** 就像餐廳裡頂級的廚房引擎，能快速又高效地備好各式菜餚，確保每道菜都美味。
+- **NVIDIA Dynamo** 則像整間米其林餐廳的營運系統。它不只包含像 vLLM 這樣的廚房，還涵蓋前台點餐、客人偏好管理、菜餚路由與上菜協調等功能。Dynamo 能依據每位客人的需求安排最適合的主廚、調整菜單細節，並確保多道菜能同時且準時上桌。
+
+在 LLM 推論的世界裡，這代表什麼？
+
+- **Pre-fill**（理解上下文）就像餐廳依據客人過去的用餐紀錄與口味偏好，準備合適的食材與調味。
+- **Decode**（生成回應）就像主廚根據這些資訊，專門為你烹調菜餚。
+- **Dynamo** 協調整個流程，讓每一顆 GPU（主廚）都能發揮最大效率，並依據不同請求自動分配資源，確保每位客人都能在最佳時機享用餐點。
+
+**總結：**  
+Dynamo 並不是要取代 vLLM，而是把像 vLLM 這樣高效的廚房，納入一套更聰明、更靈活的營運系統之中。如此一來，AI 服務就能同時服務更多使用者、支援更大的模型，並提供更高品質的體驗。
+![dynamo_analogy](https://res.cloudinary.com/iambigmomma/image/upload/v1749474634/blog/nvidia-dynamo-digitalocean-tutorial/dynamo_analogy.jpg)
+
+---
+
+## Dynamo 與其他推論框架的定位與比較
+
+NVIDIA Dynamo 是 Triton 在 LLM 工作負載上的後繼者，帶來了幾項創新：
+
+- **解耦式服務（Disaggregated Serving）**：將 prefill（上下文）與 decode（生成）階段分配到不同 GPU 上，把資源利用率與吞吐量拉到最高。
+- **KV Cache 智慧路由**：智慧路由器會把請求導向 KV cache 命中率最高的 worker，減少重複運算。
+- **動態 GPU 排程**：即時分配資源，避免瓶頸與閒置時間。
+- **分散式 KV Cache 管理**：支援多層記憶體（GPU、CPU、NVMe、遠端），能服務超出單卡容量的大型模型。
+- **NIXL 通訊函式庫**：加速異質硬體之間的資料傳輸。
+
+# 教學步驟
+
+## 步驟 1：選擇 Droplet 規格並初始化環境
+
+<details>
+  <summary>🤔 為什麼這個步驟很重要</summary>
+  
+**成功的基礎**：選對 GPU 規格對 NVIDIA Dynamo 的效能至關重要。與傳統以 CPU 為主的應用不同，LLM 推論需要：
+
+- **GPU 記憶體需求**：像 DeepSeek-R1-Distill-Llama-8B 這樣的現代 LLM，要有效率地推論需要 8-16GB 的 GPU 記憶體
+- **運算能力**：NVIDIA L40s、RTX 6000 Ada 與 RTX 4000 Ada 提供了平行矩陣運算所需的 CUDA 核心
+- **記憶體頻寬**：高頻寬記憶體能確保 GPU 核心與記憶體之間快速傳輸資料
+- **AI/ML Ready Images**：預先配置好 NVIDIA 驅動程式、CUDA toolkit 與必要函式庫，省下 30-45 分鐘的設定時間
+
+**成本優化**：選擇合適的規格可避免過度配置（浪費金錢）或配置不足（效能不佳）。建議的 32GB 以上系統 RAM 能確保容器運作與模型載入順暢。
+
+**擴展性基礎**：一開始就用對的基礎配置，未來的擴展決策會更容易、也更好預測。
+
+</details>
+
+- 建議選擇 AI/ML Ready Image
+- GPU 型號：L40s、RTX 6000 Ada、RTX 4000 Ada
+- 記憶體建議 32GB 以上
+
+![GPU Droplet Options](https://res.cloudinary.com/iambigmomma/image/upload/v1749459375/blog/nvidia-dynamo-digitalocean-tutorial/GPU_Droplet__Options.png)
+
+## 步驟 2：環境設定與前置需求
+
+<details>
+  <summary>🤔 為什麼這個步驟很重要</summary>
+  
+**完整的基礎設施地基**：這個步驟會建立起部署 NVIDIA Dynamo 所需的整個軟體堆疊：
+
+- **系統更新**：確保套用安全性修補，並與最新的 NVIDIA 驅動程式相容
+- **必要套件**：`python3-dev`、`libucx0` 等相依套件，是 Dynamo 的 Rust 與 Python 元件所必需
+- **支援 GPU 的 Docker**：容器化部署的關鍵——若沒有正確的 GPU passthrough，容器就無法存取 NVIDIA 硬體
+- **NVIDIA Container Toolkit**：串接 Docker 與 NVIDIA 驅動程式，讓 `--gpus` 旗標得以運作
+- **系統重新開機**：確保核心模組與驅動程式的變更正確生效
+
+**為什麼一定要重新開機**：NVIDIA Container Toolkit 會修改系統層級的設定。若不重新開機，你可能會在容器中遇到「device driver not found」錯誤或 GPU 存取失敗。
+
+**DigitalOcean CLI 整合**：`doctl` 讓你能順暢整合 DigitalOcean Container Registry（DOCR），這在正式環境中儲存與部署自訂 Dynamo 映像檔時不可或缺。
+
+**時間投資**：這 15-20 分鐘的設定，能避免日後好幾個小時的疑難排解，並為後續所有步驟打下穩固的基礎。
+
+</details>
+
+### 系統更新與必要套件
+
+```bash
+sudo apt-get update && sudo apt-get upgrade -y
+sudo apt-get install -y python3-dev python3-pip python3-venv libucx0 git ca-certificates curl snapd jq
+```
+
+### 安裝支援 GPU 的 Docker
+
+```bash
+# Install Docker
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+
+# Install NVIDIA Container Toolkit
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+curl -s -L https://nvidia.github.io/libnvidia-container/gpgkey | sudo apt-key add -
+curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update && sudo apt-get install -y nvidia-docker2
+sudo systemctl restart docker
+
+# Reboot system to ensure all changes take effect
+sudo reboot
+```
+
+**⚠️ 重要**：重新開機後，重新連線到你的 Droplet 並驗證 GPU 存取：
+
+```bash
+# Test GPU access in containers
+docker run --rm --gpus all nvidia/cuda:12.3.0-base-ubuntu22.04 nvidia-smi
+```
+
+![docker_nvidia_smi](https://res.cloudinary.com/iambigmomma/image/upload/v1749459375/blog/nvidia-dynamo-digitalocean-tutorial/docker_nvidia_smi.png)
+
+### 安裝 Docker Compose 與 DigitalOcean CLI
+
+```bash
+# Install Docker Compose
+sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin -y
+
+# Install doctl for DOCR access
+sudo snap install doctl
+doctl auth init  # Enter your DO API token
+doctl registry login
+```
+
+## 步驟 3：設定 Python 虛擬環境並安裝 Dynamo
+
+<details>
+  <summary>🤔 為什麼這個步驟很重要</summary>
+  
+**相依套件隔離**：Python 虛擬環境能避免不同專案與系統套件之間的衝突：
+
+- **版本控管**：Dynamo 需要特定版本的 PyTorch、transformers 與其他 ML 函式庫
+- **乾淨安裝**：避免與可能破壞其他應用的系統 Python 套件發生衝突
+- **可重現的環境**：確保在不同部署與團隊成員之間都有一致的行為
+- **易於清理**：虛擬環境可以刪除後重建，而不影響系統
+
+**為什麼用 `ai-dynamo[all]`**：`[all]` 這個 extra 會安裝選用相依套件，包括：
+
+- **監控工具**：Prometheus 指標與可觀測性元件
+- **額外後端**：支援不同模型格式與優化函式庫
+- **開發工具**：除錯與效能分析工具
+
+**正式環境最佳實務**：對正式環境的部署而言，虛擬環境不可或缺，能讓相依套件管理變得可預測且易於維護。
+
+</details>
+
+```bash
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -yq python3-dev python3-pip python3-venv libucx0
+python3 -m venv venv
+source venv/bin/activate
+
+pip install "ai-dynamo[all]"
+```
+
+## 步驟 4：下載 Dynamo 原始碼
+
+<details>
+  <summary>🤔 為什麼這個步驟很重要</summary>
+  
+**版本穩定性**：使用官方原始碼並 checkout 特定 tag（v0.3.0），能確保：
+
+- **可重現的建置**：跟著這篇教學做的每個人都能得到一致的結果
+- **經過測試的相容性**：v0.3.0 是穩定版本，已知與 DigitalOcean GPU Droplets 相容
+- **錯誤修正**：避開開發分支或較新不穩定版本中存在的問題
+- **與文件一致**：教學指示與該特定版本的 API 和設定相符
+
+**取得原始碼**：擁有完整原始碼能讓你：
+
+- **自訂修改**：可以修改設定、加入自訂指標或除錯
+- **建置容器**：要建立符合你特定需求的自訂 Docker 映像檔時必需
+- **理解架構**：可存取範例、設定與文件
+
+**Git tag 策略**：使用 `git fetch --tags` 與 `git checkout v0.3.0`，可確保你取得的正是這篇教學測試過的版本，避免版本相關的部署問題。
+
+</details>
+
+```bash
+git clone https://github.com/ai-dynamo/dynamo.git
+cd dynamo
+git fetch --tags
+git checkout v0.3.0
+```
+
+## 步驟 5：建置 Dynamo 基礎映像檔並推送到 DOCR
+
+<details>
+  <summary>🤔 為什麼這個步驟很重要</summary>
+  
+**自訂映像檔的好處**：建置自己的 Dynamo 映像檔有幾項優勢：
+
+- **環境一致性**：你的映像檔恰好包含你所需的相依套件與設定
+- **安全性控管**：你清楚知道容器裡有什麼，降低安全風險
+- **客製化**：能加入自訂函式庫、設定或監控工具
+- **版本控管**：為不同環境（dev、staging、prod）標記與管理映像檔版本
+
+**DigitalOcean Container Registry（DOCR）的優勢**：
+
+- **地理鄰近性**：從 DigitalOcean 資料中心拉取映像檔更快
+- **整合帳單**：與你的 Droplet 費用合併計算
+- **私有 Registry**：安全地儲存專屬設定
+- **團隊協作**：在團隊成員與 CI/CD pipeline 之間共用映像檔
+
+**建置時間投資**：這 20-30 分鐘的建置時間包含：
+
+- **Rust 編譯**：Dynamo 的高效能元件是用 Rust 撰寫的
+- **Python 相依套件**：安裝並優化 PyTorch 等 ML 函式庫
+- **CUDA 整合**：確保容器中有正確的 GPU 支援
+
+**正式環境就緒**：這個步驟會把開發用的程式碼，轉化為可在各環境間一致部署的正式環境容器。
+
+</details>
+
+**💡 效能優化提示**：為了獲得最佳效能，建議把 DigitalOcean Container Registry 設在 **NYC 區域**（與你的 GPU Droplet 位置相同）。這能在部署與更新時大幅縮短映像檔的傳輸時間。
+
+**📚 Registry 設定指南**：如果你還沒設定 DOCR，請依循完整的 [DigitalOcean Private Docker Registry Tutorial](https://www.digitalocean.com/community/tutorial-collections/how-to-set-up-a-private-docker-registry)，在 NYC 區域建立你的 registry。
+
+### 建置與推送流程
+
+```bash
+./container/build.sh
+# Wait 20-30 minutes
+
+export DOCKER_REGISTRY=<your-registry>
+docker tag dynamo:v0.3.0-vllm $DOCKER_REGISTRY/dynamo-base:v0.3.0-vllm
+docker login $DOCKER_REGISTRY
+docker push $DOCKER_REGISTRY/dynamo-base:v0.3.0-vllm
+# Wait 20-30 minutes
+```
+
+## 步驟 6：啟動 Dynamo 分散式執行環境服務
+
+<details>
+  <summary>🤔 為什麼這個步驟很重要</summary>
+  
+**基礎設施服務**：這套指標（metrics）的 Docker Compose stack 提供了必要的基礎設施：
+
+- **Prometheus**：從 Dynamo 服務收集並儲存時間序列指標
+- **Grafana**：提供視覺化效能指標的儀表板
+- **服務發現**：讓 Dynamo 服務執行個體能被自動發現
+- **健康監控**：追蹤服務的健康狀態與可用性
+
+**分散式架構的基礎**：這些服務讓以下成為可能：
+
+- **多服務協調**：Dynamo 的解耦式服務架構所必需
+- **效能監控**：即時掌握吞吐量、延遲與資源使用情況
+- **除錯支援**：指標有助於找出瓶頸與效能問題
+- **正式環境就緒**：在正式環境中運行 Dynamo 不可或缺
+
+**為什麼要提早啟動**：在 Dynamo 之前先啟動這些服務可確保：
+
+- **服務註冊**：Dynamo 服務啟動時能自行註冊
+- **即時監控**：Dynamo 一啟動，指標收集就隨即開始
+- **相依關係解析**：避免因缺少基礎設施服務而導致啟動失敗
+
+</details>
+
+```bash
+docker compose -f deploy/metrics/docker-compose.yml up -d
+```
+
+## 步驟 7：進入容器並掛載工作區
+
+<details>
+  <summary>🤔 為什麼這個步驟很重要</summary>
+  
+**開發環境隔離**：在容器內作業有幾項好處：
+
+- **一致的環境**：與正式環境部署相同的執行環境
+- **相依套件隔離**：避免與主機系統的套件和函式庫發生衝突
+- **GPU 存取**：容器擁有正確的 NVIDIA 驅動程式與 CUDA toolkit 存取權
+- **可重現的開發**：團隊成員都能得到一模一樣的開發環境
+
+**掛載工作區的好處**：
+
+- **程式碼持久化**：在容器內所做的變更會保存在主機檔案系統上
+- **開發流程**：用主機工具編輯程式碼，在容器內執行
+- **建置產物**：編譯後的執行檔與建置輸出可從主機存取
+- **除錯**：可從主機與容器兩端存取日誌與除錯資訊
+
+**為什麼用 `dynamo:v0.3.0-vllm` 映像檔**：這個特定映像檔包含：
+
+- **vLLM 整合**：預先配置好 vLLM 以進行高效能推論
+- **CUDA 支援**：正確的 GPU 驅動程式與 CUDA toolkit
+- **開發工具**：Rust 編譯器、Python 環境與除錯工具
+
+**容器開發 vs 主機開發**：容器開發能確保你的本機變更在正式環境中也能完全一致地運作，杜絕「在我的機器上明明可以」的問題。
+
+</details>
+
+```bash
+./container/run.sh -it --mount-workspace --image dynamo:v0.3.0-vllm
+```
+
+![container_workspace](https://res.cloudinary.com/iambigmomma/image/upload/v1749459375/blog/nvidia-dynamo-digitalocean-tutorial/container_workspace.png)
+
+## 步驟 8：建置 Rust 元件並準備 Python 環境
+
+<details>
+  <summary>🤔 為什麼這個步驟很重要</summary>
+  
+**Rust 元件的效能**：Dynamo 的核心元件是用 Rust 撰寫的，以追求最高效能：
+
+- **記憶體安全**：Rust 能防止 C/C++ 常見的記憶體洩漏與緩衝區溢位
+- **零成本抽象**：高階程式碼能編譯成高效的機器碼
+- **並行處理**：Rust 的所有權模型讓安全的平行處理成為可能
+- **效能**：Rust 的效能可與 C/C++ 匹敵，同時更安全、更易維護
+
+**建置出的關鍵執行檔**：
+
+- **`http`**：提供 API 端點的高效能 HTTP 伺服器
+- **`llmctl`**：管理 LLM 服務的命令列工具
+- **`dynamo-run`**：主要的服務編排器與執行環境
+
+**建置時間投資**：這 10-15 分鐘的建置時間包含：
+
+- **相依套件編譯**：從原始碼建置所有 Rust 相依套件
+- **優化**：release 建置包含針對效能的積極優化
+- **跨平台相容性**：確保執行檔能配合你特定的 GPU 架構運作
+
+**Python 環境設定**：以可編輯模式（`-e .`）安裝 Dynamo 能讓你：
+
+- **開發流程**：對 Python 程式碼的變更立即生效
+- **自訂修改**：能修改並測試 Dynamo 的 Python 元件
+- **PYTHONPATH 設定**：確保所有模組都能正確找到彼此
+
+**為什麼這個步驟很關鍵**：若 Rust 元件沒有正確建置，Dynamo 將無法啟動，或效能會嚴重降低。
+
+</details>
+
+```bash
+# Build Rust components
+cargo build --release
+
+# Wait 10-15 minutes for build completion
+
+mkdir -p /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin
+cp /workspace/target/release/http /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin
+cp /workspace/target/release/llmctl /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin
+cp /workspace/target/release/dynamo-run /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin
+
+# Install Python packages
+uv pip install -e .
+export PYTHONPATH=$PYTHONPATH:/workspace/deploy/sdk/src:/workspace/components/planner/src
+
+
+```
+
+## 步驟 9：啟動 Dynamo 測試服務
+
+<details>
+  <summary>🤔 為什麼這個步驟很重要</summary>
+  
+**服務驗證**：啟動 Dynamo 服務能驗證你整個部署：
+
+- **設定驗證**：確保所有設定檔正確且相容
+- **GPU 存取**：確認容器能正確存取 GPU 硬體
+- **模型載入**：測試下載並載入指定 LLM 模型的能力
+- **API 端點**：建立接收推論請求的 HTTP API
+
+**Aggregated Router 架構**：`agg_router` 設定展示了：
+
+- **請求路由**：在可用的 worker 之間智慧地分配請求
+- **負載平衡**：依請求量與 GPU 可用性自動調度
+- **KV Cache 管理**：透過智慧快取策略高效使用記憶體
+- **效能優化**：以解耦式服務追求最大吞吐量
+
+**模型下載流程**：DeepSeek-R1-Distill-Llama-8B 模型：
+
+- **大小**：約 8GB 的下載量，需要穩定的網路連線
+- **快取**：模型會在本機快取，供後續執行使用
+- **速率限制**：Hugging Face 可能會限制下載速率（因此才需要處理 429 錯誤）
+
+**服務健康指標**：成功啟動時會顯示：
+
+- **連接埠綁定**：服務監聽 8000 埠
+- **模型載入**：模型成功初始化
+- **GPU 使用率**：為模型權重配置 GPU 記憶體
+- **API 就緒**：已準備好接收推論請求
+
+</details>
+
+```bash
+cd examples/llm
+dynamo serve graphs.agg_router:Frontend -f configs/agg_router.yaml
+```
+
+![dynamo_serve](https://res.cloudinary.com/iambigmomma/image/upload/v1749459375/blog/nvidia-dynamo-digitalocean-tutorial/dynamo_serve.png)
+
+- 若在模型下載期間遇到 429（Too many requests），請等待五分鐘後再重試。
+
+## 步驟 10：發送測試請求
+
+<details>
+  <summary>🤔 為什麼這個步驟很重要</summary>
+  
+**端對端驗證**：這項最終測試會確認你整個部署都能正確運作：
+
+- **API 功能**：驗證 HTTP API 能接收並處理請求
+- **模型推論**：確認 LLM 能生成連貫的回應
+- **GPU 使用率**：驗證推論運算確實有用到 GPU
+- **回應品質**：確保模型產生預期的輸出格式
+
+**請求結構分析**：
+
+- **OpenAI 相容性**：使用相容 OpenAI 的 API 格式，方便整合
+- **模型指定**：明確指定已載入的模型
+- **訊息格式**：標準的 chat completion 格式，帶有 user/assistant 角色
+- **參數**：`max_tokens` 限制回應長度，`stream: false` 取得完整回應
+
+**效能指標**：成功的回應能展現：
+
+- **延遲**：從請求到回應的時間（第一次請求通常為 2-5 秒）
+- **吞吐量**：系統處理請求的能力
+- **品質**：對旅遊問題給出連貫、切題的回應
+- **穩定性**：處理請求後服務仍保持回應
+
+**正式環境就緒**：這項測試能確認你的部署已準備好進行：
+
+- **應用整合**：可整合進 Web 應用程式或服務中
+- **負載測試**：可進行效能基準測試與優化
+- **擴展**：作為多 GPU 或多節點部署的基礎
+
+**疑難排解價值**：如果這項測試失敗，它有助於找出下列問題：
+
+- **網路設定**：連接埠存取與防火牆設定
+- **服務健康**：Dynamo 是否正確運行
+- **模型載入**：LLM 模型是否成功載入
+- **GPU 存取**：推論是否有使用 GPU 加速
+
+</details>
+
+```bash
+curl localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "messages": [
+      {"role": "user", "content": "How to travel from Munich to Berlin?"}
+    ],
+    "stream": false,
+    "max_tokens": 300
+  }' | jq
+```
+
+## ![request_test](https://res.cloudinary.com/iambigmomma/image/upload/v1749459375/blog/nvidia-dynamo-digitalocean-tutorial/request_test.png)
+
+🎉 **恭喜！** 你已經成功部署 NVIDIA Dynamo，並收到第一個 LLM 回應。你的高效能推論服務現在正運行於 DigitalOcean GPU Droplets 上！
+
+---
+
+## DigitalOcean 實務補充
+
+- 在 Droplet 防火牆中開放 8000 埠（或你設定的 API 連接埠）
+- 建議定期檢查磁碟空間與 GPU 狀態
+- 若遇到容器啟動、權限、連接埠等問題，請參考本教學的「常見問題與疑難排解」章節
+
+---
+
+## 常見問題與疑難排解
+
+在將 NVIDIA Dynamo 部署到 DigitalOcean GPU Droplets 時，你可能會遇到以下常見問題，這些能協助你快速定位並解決問題。
+
+| 問題類型                                    | 症狀／錯誤訊息                                              | 解決方案建議                                                                                                                                             |
+| --------------------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **NVIDIA 驅動程式／CUDA 問題**                 | `nvidia-smi` 無法顯示 GPU，或 CUDA 版本不符            | 建議使用 DigitalOcean 預設驅動程式，除非有特殊需求，否則不建議升級。若要升級，請參考官方教學並重新啟動 Droplet。 |
+| **Docker／nvidia-docker 問題**               | `docker: Error response from daemon: could not select device driver` | 確認已安裝 nvidia-docker2，並以 `docker run --gpus all nvidia/cuda:12.3.0-base-ubuntu22.04 nvidia-smi` 測試。                                           |
+| **Dynamo 安裝／啟動錯誤**        | `ModuleNotFoundError`、`ImportError`、`dynamo: command not found`    | 確認 venv 中已安裝 `ai-dynamo[all]`，且已 checkout 到 v0.3.0 tag。                                                                                    |
+| **API 連線／連接埠問題**                | `curl` 無回應、`Connection refused`、連接埠錯誤                | 確認 Dynamo 啟動時的連接埠（例如 8000）、防火牆已開放，且測試指令的連接埠一致。                                                                   |
+| **GPU 資源不足／無法配置** | `CUDA out of memory`、`No GPU found`                                 | 檢查 Droplet 的 GPU 規格，config.yaml 中的 `gpu` 參數不應超過實體 GPU 數量。                                                           |
+| **版本／相依套件不相容**        | `No matching distribution found for ai-dynamo-runtime==X.X.X`        | 建議 checkout v0.3.0 tag，並確保 pip/venv 是乾淨的。                                                                                         |
+
+---
+
+## 結語
+
+你已經學會如何在 DigitalOcean GPU Droplets 上部署並驗證 NVIDIA Dynamo，完成了高效能 LLM 推論服務的完整流程。這能幫助你快速打造可擴展的 AI 應用，並可依需求擴展到多節點、前端整合等進階應用。
+
+### 下一步
+
+既然你已經成功在單一 GPU Droplet 上部署了 NVIDIA Dynamo，下一個關鍵步驟就是理解並優化它的效能：
+
+#### **效能基準測試與監控**
+
+在下一篇教學中，你將學會如何打造一套完整的監控儀表板，並進行系統性的效能測試，以優化你的 NVIDIA Dynamo 部署。內容包括理解關鍵指標、找出瓶頸，以及做出以資料為依據的擴展決策。
+
+敬請期待即將推出的指南 **「為 NVIDIA Dynamo 打造效能監控儀表板」**！
+
+### 相關資源
+
+- 查看 [GPU Droplet Pricing](https://www.digitalocean.com/blog/announcing-gpu-droplets) 進行成本規劃
+- 探索 [DigitalOcean Community](https://www.digitalocean.com/community)，取得更多關於 Droplet 管理、Docker 使用或其他進階 pipeline 的教學
+- 參考 [NVIDIA Dynamo Official Documentation](https://github.com/ai-dynamo/dynamo) 了解更多進階功能
+
+**祝你部署順利、推論高效！**

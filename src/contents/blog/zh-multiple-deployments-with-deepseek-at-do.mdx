@@ -1,0 +1,214 @@
+---
+title: '如何在 DigitalOcean 上部署 DeepSeek R1：三種方法、三種情境'
+publishedAt: '2025-02-10'
+description: '本文從高層次比較在 DigitalOcean 上部署 DeepSeek R1 的三種方式。每種方法——GenAI Platform（serverless）、DigitalOcean + HUGS、以及 GPU + Ollama——在複雜度、安全性與客製化程度上各有不同。透過實際情境、成本與使用範例，你會找到最適合你的技術程度、效能需求，以及微調或進階 AI 工作流程規劃的部署方式。'
+banner: 'deepseek-deploy-in-3-ways'
+tags: 'GPU,LLM,DeepSeek'
+---
+
+# 如何在 DigitalOcean 上部署 DeepSeek R1：三種方法、三種情境
+
+本文比較在 DigitalOcean 上部署 **DeepSeek R1**（一個高性價比的大型語言模型，LLM）的三種方式。每種方法在**設定複雜度**、**安全性**、**微調（fine-tuning）**與**系統層級客製化**上都有不同的取捨。看完這篇，你就會知道哪種方式最符合你的技術經驗與專案需求。
+
+---
+
+## 概觀
+
+**DeepSeek R1** 是一個泛用型 LLM，適合文字生成、問答與聊天機器人開發。在 DigitalOcean 上，你可以用以下三種方式之一來部署 DeepSeek R1：
+
+1. **方法 A：GenAI Platform（Serverless）**  
+   一個以平台為基礎的方案，把 DevOps 負擔降到最低、也能快速看到成果，但不支援原生微調。
+
+2. **方法 B：DigitalOcean + Hugging Face Generative Service（IaaS）**  
+   提供預建好的 Docker 環境與 API token，支援在一台 GPU droplet 上跑多個容器，並允許訓練或微調。
+
+3. **方法 C：GPU + Ollama（IaaS）**  
+   對作業系統、安全設定與模型微調有完整掌控，但複雜度也較高。
+
+---
+
+## 成本考量
+
+### 方法 A：GenAI Platform（Serverless）
+
+![GenAI-Platform](https://res.cloudinary.com/iambigmomma/image/upload/v1739343944/blog/deepseek-deploy-3-ways/genai-deepseek.png)
+
+[DigitalOcean GenAI Platform](https://docs.digitalocean.com/products/genai-platform/details/pricing/#open-source-models) 採用**用量計費**的定價模式：
+
+- **依 token 計費**：輸入與輸出 token 都要付費（以每千 token 追蹤，以每百萬 token 顯示）。
+- **開源模型**：例如 DeepSeek-R1-distill-llama-70B 為每百萬 token **$0.99**。更低價的模型從每百萬 token $0.198 起。
+- **商用模型**：如果你自帶 API token（例如 Anthropic），就依該供應商的費率計費。
+- **知識庫（Knowledge Bases）**：索引 token 與向量儲存會另外收費。
+- **Guardrails**：若啟用 jailbreak 或內容審核，每百萬 token $3.00。
+- **Functions**：依 [DigitalOcean Functions](https://docs.digitalocean.com/products/functions/) 定價計費。
+
+**Playground 限制**：GenAI playground 免費，但每個團隊每天限用 **10,000 個 token**（輸入與輸出合計）。
+
+### 方法 B 與 C：GPU Droplets
+
+![gpu-droplet-deepseek](https://res.cloudinary.com/iambigmomma/image/upload/v1739343944/blog/deepseek-deploy-3-ways/gpu-droplet-hugs-deepseek.png)
+
+**方法 B**（IaaS 上的 HUGS）與**方法 C**（IaaS 上的 Ollama）都需要你開通一台 GPU droplet。目前的定價請參考 [Announcing GPU Droplets](https://www.digitalocean.com/blog/announcing-gpu-droplets)。發文當下：
+
+- **隨需價格從每 GPU 每小時 $2.99 起**（可能變動）。
+- 可能有額外費用（例如資料 egress 或儲存）。
+- 你要自行負責 OS 層級的安全、擴展與修補。
+
+---
+
+## 安全性與維護
+
+- **方法 A（GenAI Serverless）**
+
+  - 安全修補與維護會自動處理。
+  - 選用的 guardrails 或 KB 會依 token 計費。
+
+- **方法 B（GPU Droplet 上的 HUGS）**
+
+  - 你要管理 OS 安全、Docker 環境與防火牆規則。
+  - LLM 端點預設提供以 token 為基礎的驗證。
+
+- **方法 C（GPU Droplet 上的 Ollama）**
+  - 你承擔最高程度的掌控與責任：OS 安全、防火牆、使用監控。
+  - 適合合規或自訂設定的需求，但需要更多 DevOps 工作。
+
+> **效能基準測試？**  
+> 目前沒有公布官方的速度指標或 SLA。效能取決於 GPU 大小、資料量與具體工作流程。若你需要協助優化效能，歡迎聯絡我們的 solution architects。未來我們可能會分享基準測試技巧的文章。
+
+---
+
+## 方法 A：GenAI Platform（Serverless）
+
+當你想要一個完全託管的 DeepSeek R1 部署、又不想開通 GPU droplet 或處理 OS 事務時，就用**方法 A**。你可以透過好上手的 UI 快速建立聊天機器人、問答流程或基本的 RAG 設定。
+
+### 何時選擇方法 A
+
+- 你的 DevOps 經驗有限，或不想管理伺服器。
+- 你需要一個快速的 AI 助理（例如 WordPress 外掛或 FAQ bot）。
+- 你不打算用私有資料訓練或微調模型。
+
+### 範例情境：Chelsea 的在地咖啡館部落格
+
+![chelsea](https://res.cloudinary.com/iambigmomma/image/upload/v1739273832/blog/deepseek-deploy-3-ways/chelsea-case.jpg)
+
+Chelsea 為她的咖啡館經營一個 WordPress 部落格，發布菜單更新與社區活動。她熟悉網站代管，但不熟 OS 管理：
+
+- 她想要一個聊天機器人，回答營業時間、菜單特餐或在地活動的問題。
+- 之後若遇到有問題的內容，可以再加上 guardrails。
+- GenAI Platform 幾乎不需要伺服器管理，是個輕鬆的選擇。
+
+#### 不適合的情況…
+
+- 你需要**微調**或特定領域的訓練。
+- 你必須滿足嚴格的安全需求（私有網路、進階 OS 規則）。
+- 你打算在單一伺服器上跑多個微服務或高負載任務。
+
+---
+
+## 方法 B：DigitalOcean + Hugging Face Generative Service（HUGS）
+
+方法 B 適合想要以 **HUGS** 為基礎、跑在 GPU droplet 上的開發者，它提供部分的系統管理自由度（多容器）與直接可用的 **API token**，並支援在本機訓練或微調。
+
+### 何時選擇方法 B
+
+- 你想要比完全手動更快抵達 AI 端點的路徑。
+- 你打算在同一台 GPU droplet 上做一些訓練或**微調**。
+- 你懂基本的 Docker，也不介意部分的伺服器管理。
+
+### 範例情境：CHFB Labs
+
+![CHFB](https://res.cloudinary.com/iambigmomma/image/upload/v1739273832/blog/deepseek-deploy-3-ways/chfb-case.jpg)
+
+CHFB Labs 為客戶快速打造概念驗證（PoC）：
+
+- 有些客戶需要特定領域訓練或部分微調。
+- 額外的 Docker 容器（例如 staging 或 logging）可以跑在同一台 droplet 上。
+- 內建預設的 **access token**，省去自寫驗證程式碼。
+
+#### 不適合的情況…
+
+- 你想要 **serverless** 的方式（方法 A 更簡單）。
+- 你需要進階的 OS 層級調整（例如 kernel modules）。
+- 你偏好完全手動、零預先設定的流程。
+
+---
+
+## 方法 C：GPU + Ollama
+
+當你需要對 GPU droplet 有完整掌控時，就用**方法 C**。你可以設定 OS 安全、實作自訂的領域訓練、建立自己的端點，代價是更高的 DevOps 需求。
+
+### 何時選擇方法 C
+
+- 你想手動管理 OS、Docker 或編排器（orchestrators）。
+- 你需要嚴格合規或進階自訂規則（防火牆、特殊網路）。
+- 你打算**微調** DeepSeek R1 或執行大規模任務。
+
+### 範例情境：Mosaic Solutions
+
+![mosaic](https://res.cloudinary.com/iambigmomma/image/upload/v1739273832/blog/deepseek-deploy-3-ways/mosaic-case.jpg)
+
+Mosaic Solutions 提供企業級分析服務：
+
+- 他們儲存敏感資料，需要加密或特殊工具。
+- 他們直接安裝 [Ollama](https://github.com/jmorganca/ollama) 來管理 DeepSeek R1 的對外暴露。
+- 他們自行處理 OS 監控、使用日誌與自訂效能調校。
+
+#### 不適合的情況…
+
+- 你不喜歡 DevOps 工作，或無法管理 OS 層級的安全。
+- 你想要一鍵或最省事的部署。
+- 你只需要一個用量不大的小型聊天機器人。
+
+---
+
+## 比較
+
+用下表比較這三種方法：
+
+| **類別**           | **方法 A（GenAI Serverless）**                          | **方法 B（DO + HUGS，IaaS）**                                            | **方法 C（GPU + Ollama，IaaS）**                                          |
+| ---------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| **系統管理知識** | **極少**——完全託管的 UI，不需伺服器設定           | **中等**——以 Docker 為基礎的 GPU droplet，部分系統管理                     | **高**——完整的 OS 與 GPU 管理、自訂安全等                   |
+| **彈性**        | **中等**——內建 RAG，不能微調                  | **高**——多容器使用，可選擇在 GPU 上訓練／微調      | **高**——自訂 OS、進階安全、特定領域微調         |
+| **設定複雜度**   | **低**——不需開通 droplet                          | **中等**——建立 GPU droplet、啟動 HUGS 容器、處理 Docker       | **高**——手動設定環境、安全、擴展                      |
+| **安全性 / API**     | 託管的 guardrails、端點暴露有限              | 預設以 token 為基礎；需要時可在同一台 droplet 上跑更多服務 | DIY——自建驗證金鑰、防火牆規則、使用監控                     |
+| **微調**        | **否**                                                     | **是**——透過訓練腳本整合                                   | **是**——完全掌控的環境，可做領域訓練                   |
+| **最適合**           | 非技術使用者、快速 AI 設定、零 DevOps 負擔 | 需要快速 PoC、在 GPU droplet 上跑多應用、部分訓練的團隊 | 熟悉 DevOps 的團隊、特殊任務、合規、特定領域方案 |
+| **不適合的情況…**      | 你需要微調或 OS 層級自訂、想跑多 LLM    | 你想要完全 serverless 的方式或進階 OS 修改             | 你想快速設定、沒有 DevOps 人力、只需要小型聊天機器人      |
+
+---
+
+## 結論
+
+你選哪種部署方式，取決於你需要**多少掌控權**、**是否**想要微調，以及你對 GPU 資源管理**有多自在**：
+
+- **方法 A（GenAI Serverless）**
+
+  - 最容易上手，不需 GPU droplet。
+  - 客製化有限，不能微調。
+  - 適合基本的聊天機器人或問答（像 WordPress 外掛）。
+
+- **方法 B（DigitalOcean + HUGS，IaaS）**
+
+  - 複雜度中等，在 GPU droplet 上有預建的 Docker 環境。
+  - 可做多服務的部分系統管理，支援本機微調。
+  - 在便利與彈性之間取得平衡的選項。
+
+- **方法 C（GPU + Ollama，IaaS）**
+  - 掌控最高：OS 層級安全、大規模任務、進階訓練。
+  - 適合合規或特殊流程。
+  - 需要相當程度的 DevOps 專業。
+
+### 後續步驟
+
+- **方法 A 教學**：學會如何在幾分鐘內用 GenAI Platform 建立聊天機器人。
+- **方法 B 指南**：開一台含 HUGS 的 GPU droplet、用 token 保護它，並整合訓練或微調。
+- **方法 C 文章**：探索如何透過 Ollama 完整掌控 GPU droplet、建立自訂推論端點、處理特定領域訓練。
+
+#### 接下來可以看什麼
+
+- 查看 [GenAI Platform Pricing](https://docs.digitalocean.com/products/genai-platform/details/pricing/#open-source-models) 了解方法 A 的 token 計費。
+- 參考 [Announcing GPU Droplets](https://www.digitalocean.com/blog/announcing-gpu-droplets) 了解 GPU droplet 成本（方法 B 與 C）。
+- 我們目前不公布官方效能基準。若需要優化協助，請聯絡我們的 solution architects，或留意未來關於效能測試的文章。
+- 到 [DigitalOcean Community](https://www.digitalocean.com/community) 探索關於 droplet 管理、Docker 使用或其他進階流程的教學。
+
+**祝你部署與微調順利！**
