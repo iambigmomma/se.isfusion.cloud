@@ -36,3 +36,9 @@ yarn-error.log*
 
 # changelog
 CHANGELOG.md
+
+# writing workspace (drafts / migrated article projects — not part of the site build)
+writing-workspace
+
+# article content — prose formatting is authored deliberately, not Prettier's call
+src/contents
