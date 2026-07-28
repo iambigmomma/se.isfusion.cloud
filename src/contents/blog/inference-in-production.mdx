@@ -17,35 +17,22 @@ Think of it as a field guide. Each part stands on its own; read the one that's b
 
 ### The five parts
 
-1. **[Why Your LLM Bill Is 3× What You Expected](article-1-llm-bill-3x.md)** — The advertised token price is a floor, not a ceiling. Output tokens, hidden reasoning tokens, non-production traffic, verbosity, and long-context surcharges compound into the bill nobody budgeted for. Where the money actually goes, and the four levers that bring it back.
+1. **[Why Your LLM Bill Is 3× What You Expected](/blog/llm-bill-3x)** — The advertised token price is a floor, not a ceiling. Output tokens, hidden reasoning tokens, non-production traffic, verbosity, and long-context surcharges compound into the bill nobody budgeted for. Where the money actually goes, and the four levers that bring it back.
 
-2. **[Choosing the Right Model for Your Use Case](article-2-model-selection.md)** — Model choice is the single biggest lever on both cost and quality. Establish your accuracy floor first, then find the *smallest* model that clears it. With deep dives into translation, RAG, code, and customer support — and why benchmarks are screening filters, not verdicts.
+2. **[Choosing the Right Model for Your Use Case](/blog/choosing-the-right-model)** — Model choice is the single biggest lever on both cost and quality. Establish your accuracy floor first, then find the *smallest* model that clears it. With deep dives into translation, RAG, code, and customer support — and why benchmarks are screening filters, not verdicts.
 
-3. **[Prompt Caching in Practice — From 7% to 74%](article-3-prompt-caching.md)** — The highest-leverage cost and latency optimization most teams under-use, and the one-line mistake that quietly kills it. Includes a benchmark I ran myself: moving a single field took cache hit rate from 0% to 99% and cut input cost 92%.
+3. **[Prompt Caching in Practice — From 7% to 74%](/blog/prompt-caching)** — The highest-leverage cost and latency optimization most teams under-use, and the one-line mistake that quietly kills it. Includes a benchmark I ran myself: moving a single field took cache hit rate from 0% to 99.3% and cut input cost by roughly 90%.
 
-4. **[The Real TCO of a Full-Stack AI Application](article-4-full-stack-tco.md)** — Every comparison online compares token prices. None compares the *whole* stack — compute, vector DB, storage, networking, egress, ops. That's where the real number lives, with a transparent model you can re-run yourself.
+4. **[The Real TCO of a Full-Stack AI Application](/blog/full-stack-ai-tco)** — Every comparison online compares token prices. None compares the *whole* stack — compute, vector DB, storage, networking, egress, ops. That's where the real number lives, with a transparent model you can re-run yourself.
 
-5. **[Multi-Provider Routing Is Not a Problem — It's Your Architecture](article-5-multi-provider-routing.md)** — Serious teams are multi-provider by design. Why that's the right instinct, how to route by constraint, and why "goodput" — requests that meet the SLO with a correct answer — is the metric that actually matters.
+5. **[Multi-Provider Routing Is Not a Problem — It's Your Architecture](/blog/multi-provider-routing)** — Serious teams are multi-provider by design. Why that's the right instinct, how to route by constraint, and why "goodput" — requests that meet the SLO with a correct answer — is the metric that actually matters.
 
 ### How I wrote it
 
 Three commitments run through all five parts:
 
 - **Start from your problem, not a product.** Every part opens with something you've actually felt, not a feature.
-- **Every number is sourced or measured.** Where I could, I ran the benchmark myself rather than quote a vendor figure — the caching numbers in Part 3 and the cost model in Part 4 are mine, and the harnesses are open so you can reproduce them.
+- **Every number is sourced or measured.** Where I could, I ran the benchmark myself rather than quote a vendor figure — the caching numbers in Part 3 and the cost model in Part 4 are mine, and every input is stated so you can rebuild them and change the assumptions you disagree with.
 - **Honest about trade-offs.** Including where the tools I work on fit, and where they don't. A recommendation you can't trust isn't worth reading.
 
 If you're a CTO staring at a surprising invoice, an AI engineer deciding what to ship, or a platform engineer designing the inference layer — this is written for you. Start anywhere.
-
-{/* series-nav */}
-
----
-
-### Series — Inference in Production
-
-- **Series intro — Inference in Production: A Five-Part Field Guide** (you are here)
-- [Part 1 — Why Your LLM Bill Is 3× What You Expected](/blog/llm-bill-3x)
-- [Part 2 — Choosing the Right Model for Your Use Case](/blog/choosing-the-right-model)
-- [Part 3 — Prompt Caching in Practice — From 7% to 74% Hit Rate](/blog/prompt-caching)
-- [Part 4 — The Real TCO of a Full-Stack AI Application](/blog/full-stack-ai-tco)
-- [Part 5 — Multi-Provider Routing Is Not a Problem — It's Your Architecture](/blog/multi-provider-routing)
