@@ -164,32 +164,6 @@ _一旦跨過供應商的 context 門檻，較高的費率會套用到整個請�
 
 **該檢查什麼：** 拿你的 p95 與 p99 輸入 context 長度去對照每一家供應商的級距邊界。如果這些數字正逼近任何一個門檻，就要搞清楚究竟有多少比例的請求正以長 context 費率計費。
 
----
-
-### 「本機推論值得嗎？」的計算
-
-在談成本槓桿之前，有個自然會冒出來的問題值得先處理：到什麼程度，自行架設會徹底贏過託管 API 的成本？
-
-![衡量託管 API 與自行架設推論的天平](https://res.cloudinary.com/iambigmomma/image/upload/v1782204899/blog/llm-bill-3x/local_vs_managed.png)
-
-_託管 API vs 自行架設：取捨取決於流量與可預測性。_
-
-有家 SaaS 公司記錄了他們從雲端 LLM API（每月 $6,700）遷移到 [AWS EC2 G4dn.xlarge 上的三個 Ollama 執行個體](https://markaicode.com/usecases/llm-for-saas/)的過程，用來做審核、摘要與嵌入。新基礎設施成本：每月 $1,280。每月省下：$5,420。他們維持了 99.9% 的可用時間，以及 312ms 的中位數延遲——遠在他們 500ms 的 SLA 之內。
-
-這個取捨是真實存在的，值得看清楚：
-
-|                | 託管 API                     | 自行架設的本機推論         |
-| -------------- | ---------------------------- | -------------------------- |
-| **建置時間**   | 10 分鐘（取得一把 API 金鑰） | 2–3 天的工程工作           |
-| **維運負擔**   | 零                           | 持續性的：更新、擴展、監控 |
-| **模型多樣性** | 立即取得最新的前沿模型       | 受限於你的硬體跑得動什麼   |
-| **規模彈性**   | 即時的彈性伸縮               | 手動容量規劃               |
-| **損益兩平點** | 低流量                       | 高且可預測的流量           |
-
-對於擁有高量、可預測、能容忍延遲的工作負載的團隊——大量文件處理、夜間分析、大規模內容審核——自行架設可以帶來 70–80% 的成本降幅。對於需要前沿模型品質、流量不規律、或需要快速迭代模型的團隊，託管 API 仍然是正確的預設選項。大多數生產團隊最後都會跑混合架構：可預測的高量層用本機推論，複雜推論與變動負載則用託管 API。
-
----
-
 ### 我們在 DigitalOcean Serverless Inference 上實測到什麼
 
 上面那些相乘因子與供應商無關。本節的數字來自在 **`https://inference.do-ai.run/v1` 上的實跑 API**，記錄於 DigitalOcean 的 [Multi-Model API Cost Governance with the Inference Router](https://www.digitalocean.com/community/tutorials/inference-router-multi-model-api-cost-governance) 教學（資料截至 2026 年 6 月 16 日）。方法：固定提示、`temperature=0`、token 數讀自回應的 `usage`，成本則以實跑當下[公開的 DigitalOcean Inference 費率](https://docs.digitalocean.com/products/inference/details/pricing/)計算。（這裡一樣適用揭露原則——我任職於 DigitalOcean——但這些是有記錄的 API 實測，不是行銷宣稱，而且背後的模式在任何供應商上都會重現。）
@@ -372,7 +346,6 @@ _這是「生產環境中的推論」五篇系列文章的第 1 篇。[第 2 篇
 - [Gemini API Pricing](https://ai.google.dev/gemini-api/docs/pricing) — Google
 - [I Analyzed 60+ LLM Models and Found Companies Overpay by 50-90%](https://dev.to/khursheed_hassan_dd91f7c8/i-analyzed-60-llm-models-and-found-companies-overpay-by-50-90-heres-why-4851) — DEV Community
 - [The Hidden AI Bill: Why Non-Prod LLM Costs Spiral](https://speedscale.com/blog/llm-simulation-missing-runtime-enterprise-ai-agents/) — Speedscale
-- [LLM for SaaS: 5 Production Use Cases](https://markaicode.com/usecases/llm-for-saas/) — MarkAICode
 - [Inference Router：架構深入解析](https://www.digitalocean.com/blog/inference-router-architecture) — DigitalOcean
 
 {/* series-nav */}

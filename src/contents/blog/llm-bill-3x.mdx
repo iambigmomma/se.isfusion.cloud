@@ -164,32 +164,6 @@ _Cross a provider's context threshold and the higher rate applies to the entire 
 
 **What to check:** Audit your p95 and p99 input context length against each provider's tier boundary. If those numbers are approaching any threshold, understand exactly what percentage of requests is getting billed at long-context rates.
 
----
-
-### The "Is Local Inference Worth It?" Calculation
-
-Before covering the cost levers, it's worth addressing a question that comes up naturally: at what point does self-hosting beat managed API costs entirely?
-
-![Balance scale weighing a managed API against self-hosted inference](https://res.cloudinary.com/iambigmomma/image/upload/v1782204899/blog/llm-bill-3x/local_vs_managed.png)
-
-_Managed API vs self-hosting: a tradeoff driven by volume and predictability._
-
-One SaaS company documented their migration from a cloud LLM API ($6,700/month) to [three Ollama instances on AWS EC2 G4dn.xlarge](https://markaicode.com/usecases/llm-for-saas/) for moderation, summarization, and embeddings. New infrastructure cost: $1,280/month. Monthly savings: $5,420. They maintained 99.9% uptime and a median latency of 312ms — well within their 500ms SLA.
-
-The tradeoff is real and worth understanding clearly:
-
-|                        | Managed API                       | Self-Hosted Local Inference           |
-| ---------------------- | --------------------------------- | ------------------------------------- |
-| **Setup time**         | 10 minutes (get an API key)       | 2–3 days of engineering work          |
-| **Operational burden** | Zero                              | Ongoing: updates, scaling, monitoring |
-| **Model variety**      | Latest frontier models, instantly | Limited to what runs on your hardware |
-| **Scale flexibility**  | Instant elasticity                | Manual capacity planning              |
-| **Break-even**         | Low volume                        | High, predictable volume              |
-
-For teams with high, predictable, latency-tolerant workloads — bulk document processing, nightly analytics, content moderation at scale — self-hosting can deliver 70–80% cost reductions. For teams that need frontier model quality, irregular traffic, or fast model iteration, managed APIs remain the right default. Most production teams end up running a hybrid: local inference for the predictable high-volume tier, managed API for complex reasoning and variable load.
-
----
-
 ### What We Measured on DigitalOcean Serverless Inference
 
 The multipliers above are provider-agnostic. The numbers in this section come from **live API runs on `https://inference.do-ai.run/v1`** documented in DigitalOcean's [Multi-Model API Cost Governance with the Inference Router](https://www.digitalocean.com/community/tutorials/inference-router-multi-model-api-cost-governance) tutorial (as of June 16, 2026). Methodology: fixed prompts, `temperature=0`, token counts read from response `usage`, costs computed from [published DigitalOcean Inference rates](https://docs.digitalocean.com/products/inference/details/pricing/) at the time of the run. (Full disclosure applies here — I work at DigitalOcean — but these are documented API measurements, not marketing claims, and the underlying pattern reproduces on any provider.)
@@ -372,7 +346,6 @@ _This is Article 1 in a 5-part series on LLM inference in production. [Article 2
 - [Gemini API Pricing](https://ai.google.dev/gemini-api/docs/pricing) — Google
 - [I Analyzed 60+ LLM Models and Found Companies Overpay by 50-90%](https://dev.to/khursheed_hassan_dd91f7c8/i-analyzed-60-llm-models-and-found-companies-overpay-by-50-90-heres-why-4851) — DEV Community
 - [The Hidden AI Bill: Why Non-Prod LLM Costs Spiral](https://speedscale.com/blog/llm-simulation-missing-runtime-enterprise-ai-agents/) — Speedscale
-- [LLM for SaaS: 5 Production Use Cases](https://markaicode.com/usecases/llm-for-saas/) — MarkAICode
 - [Inference Router: An Architecture Deep-Dive](https://www.digitalocean.com/blog/inference-router-architecture) — DigitalOcean
 
 {/* series-nav */}
