@@ -2,10 +2,12 @@
 title: 'Multi-Provider Routing Is Not a Problem — It''s Your Architecture'
 description: 'Sophisticated teams architect for multi-provider routing by default. Rather than fighting this reality, the winning strategy pairs honest performance data with routing intelligence. Here''s how production inference routing actually works in 2026 — and where DigitalOcean fits.'
 banner: 'multi-provider-routing-banner'
-publishedAt: '2026-06-17'
+publishedAt: '2026-07-26'
 tags: 'ai-ml,gen-ai,llm,infrastructure,architecture'
 ---
 > *Disclosure: I'm a Solutions Architect at DigitalOcean, so when I mention DigitalOcean products it's an informed-insider view, not a neutral one — I flag those moments clearly and keep the analysis vendor-neutral wherever the topic allows. The opinions here are my own.*
+
+*Why serious teams run multi-provider inference by default — and where DigitalOcean's first-party Inference Router fits, with cost figures from documented runs on `inference.do-ai.run`. The routing patterns are provider-agnostic; DO-specific numbers come from published API runs, not marketing claims.*
 
 ### Introduction
 
@@ -20,7 +22,7 @@ This article covers how multi-provider routing works in 2026, the tools teams us
 ### Key Takeaways
 
 * Multi-provider routing is the *default* architecture for serious teams — something to design for, not a problem to fight.
-* The drivers are structural: no provider has every model, API uptime (~99.1–99.8%) sits below traditional infra norms so failover is mandatory, and the same model spreads up to 6× in price across providers.
+* The drivers are structural: no provider has every model, API uptime (~99.1–99.8%) sits below traditional infra norms so failover is mandatory, and the same model spreads ~2× across serverless providers (and 60×+ across model tiers).
 * Route by constraint: batch → cheapest, real-time chat → lowest TTFT, niche → broadest catalog, compliance → certified region, plus a fallback path.
 * Optimize for **goodput** — requests that meet the SLO with a correct answer — not raw tokens/sec or the cheapest token.
 * OpenAI-compatible APIs make switching a base-URL change, so lock-in is weak; first-party routing (DO Inference Router, "up to 67%") differentiates operationally, not by trapping you.
@@ -40,13 +42,13 @@ The model landscape has fragmented. Frontier closed models (Claude, GPT-5, Gemin
 
 Traditional cloud infrastructure SLAs run at 99.9%+. LLM API availability doesn't match this. One third-party monitor ([TokenMix's 30-day rolling data](https://tokenmix.ai/blog/best-llm-api-providers)) reported the major providers in the ~99.1–99.8% range, with the lowest-performing at ~97.2% (roughly 20 hours of downtime per month). Treat any single such number as directional rather than authoritative — providers publish their own status pages, and your *measured* availability depends on your region, model, and traffic shape. But the structural point holds across every source: production LLM APIs sit below the 99.9%+ you'd expect from mature cloud infrastructure. For applications where the AI layer is on the critical path, that mandates a failover strategy — verify each candidate provider's real numbers against its status page rather than any aggregator's table.
 
-This is not a criticism of any specific provider — LLM inference is harder to make reliable than a static file server. It's a structural property of the technology in its current maturity. If your application cannot tolerate 5 hours of monthly downtime from a single provider, you need more than one.
+This is not a criticism of any specific provider — LLM inference is harder to make reliable than a static file server. It's a structural property of the technology in its current maturity. Put the range in hours: 99.8% is about 1.5 hours of downtime in a 30-day month, 99.1% is about 6.5 hours, and 97.2% is roughly 20 hours. If your application can't absorb several hours of unavailability from a single provider in a month, you need more than one.
 
 **3. Price spreads make routing economically rational**
 
-The same model, across different providers, [spreads up to 6× in price](https://www.digitalapplied.com/blog/ai-inference-providers-pricing-matrix-q2-2026) in Q2 2026. Llama 4 70B at $0.65/M on Together's batch tier versus $4.20/M at the most expensive listed price. If you're running high-volume batch workloads and routing them to the cheapest provider, you're leaving real money on the table by staying single-provider.
+The same open model, across serverless providers, spreads roughly 2× in price. Llama 3.3 70B (June 2026) runs $0.59/M at [Groq](https://groq.com/pricing), $0.65 at [DigitalOcean](https://docs.digitalocean.com/products/inference/details/pricing/), $0.90 at [Fireworks](https://fireworks.ai/pricing), and $1.04 at [Together](https://www.together.ai/pricing) — and batch tiers (typically ~50% off) pull the low end down further. Per-provider the gap is modest, but on high-volume batch workloads even 2× is real money left on the table by staying single-provider. (The bigger lever is across model *tiers* — see below.)
 
-And that's just the *same* model across providers. The spread across model *tiers* is far larger — which is the other half of routing economics. Here is the live price ladder on a single provider (DigitalOcean serverless, per 1M tokens, pulled June 2026):
+And that's just the *same* model across providers. The spread across model *tiers* is far larger — which is the other half of routing economics. Here is the live price ladder on a single provider ([DigitalOcean serverless](https://docs.digitalocean.com/products/inference/details/pricing/), per 1M tokens, pulled June 2026):
 
 | Model | Input | Output |
 |-------|------:|-------:|
@@ -58,13 +60,17 @@ And that's just the *same* model across providers. The spread across model *tier
 | Claude Opus 4.8 | $5.00 | $25.00 |
 | o1 | $15.00 | $60.00 |
 
+*Prices are as of June 2026 and move fast — providers reprice, add tiers, and retire models on short notice. Re-check the official pricing page for every model in your routing table before you budget against these numbers.*
+
 ![Price ladder of DigitalOcean serverless model tiers from Qwen3-32B to o1, a 60× input spread](https://res.cloudinary.com/iambigmomma/image/upload/v1784186478/blog/multi-provider-routing/price_ladder.png)
+
+*The same provider, seven tiers: $0.25 to $15.00 per million input tokens. The routing decision that matters most is which rung of this ladder a request lands on — not which vendor's logo is on the invoice.*
 
 That's a **60× spread on input and over 100× on output** between the cheapest and most expensive tier — on one provider, before you even compare across providers. The entire case for routing rests on this gap: a task that a $0.25 model handles correctly costs 60× more if you reflexively send it to the top tier. Routing is simply the discipline of not doing that.
 
 ---
 
-### The Routing Taxonomy
+### Route by constraint: batch to cheapest, chat to lowest TTFT
 
 Not all inference traffic has the same requirements. A rational routing architecture classifies traffic by its actual constraints and routes accordingly:
 
@@ -81,21 +87,23 @@ Think of this like a shipping logistics operation. An experienced shipper doesn'
 
 ![Field-guide schematic of a routing dispatcher sending workloads along Batch, Real-time, Niche, and Compliance routes](https://res.cloudinary.com/iambigmomma/image/upload/v1784186478/blog/multi-provider-routing/logistics_dispatcher.png)
 
+*A router is a dispatcher: it reads the constraint on each request — cost, latency, model availability, certification — and picks the lane that satisfies it. The lanes are the routing table above.*
+
 The teams that treat all inference traffic identically — routing everything through a single provider at a single tier — are the equivalent of paying overnight air rates for everything, including the non-urgent shipments.
 
 ---
 
-### The Tools Teams Already Use
+### LiteLLM and OpenRouter already do this — what first-party routing adds
 
-Before discussing first-party routing, it's worth being honest about what the ecosystem already offers. Your customers know about these tools and may already be using them.
+Before discussing first-party routing, it's worth being honest about what the ecosystem already offers. You probably already know these tools, and you may already have one in production.
 
-**LiteLLM** is an open-source Python library and self-hostable proxy that exposes 100+ LLM providers through an OpenAI-compatible interface. It handles provider abstraction, fallback logic, cost tracking, and rate limiting. The tradeoff: it's self-hosted (ops burden) and adds latency overhead. A supply-chain incident in March 2026 raised dependency security concerns. But for teams with Python infrastructure and the capacity to self-host, it's a proven option with a large community.
+**LiteLLM** is an open-source Python library and self-hostable proxy that exposes 100+ LLM providers through an OpenAI-compatible interface. It handles provider abstraction, fallback logic, cost tracking, and rate limiting. The tradeoff: it's self-hosted (ops burden) and adds latency overhead. Self-hosting also means you own the dependency chain — a proxy of this scope pulls in a large transitive tree, so pin versions and track advisories the way you would for any other service on your critical path. For teams with Python infrastructure and the capacity to self-host, it's a proven option with a large community.
 
 **OpenRouter** is a managed routing service with 300+ models from dozens of providers behind a single API and unified billing. It accepts a priority-ordered array of models and automatically tries the next when the primary fails, rate-limits, or refuses. It's not self-hostable, but it removes the operational burden entirely. The tradeoff: you're adding another managed dependency to your critical path, and you have less visibility into routing decisions than a self-hosted solution.
 
 **Portkey, Bifrost, and others** occupy similar positions — managed gateways with varying emphasis on observability, cost tracking, and enterprise features.
 
-The important point: **these tools exist, they work, and sophisticated buyers have already evaluated them.** Telling a customer "you don't need OpenRouter because you can just use us" is not a compelling argument if they've already integrated it. The better conversation is: what does first-party routing offer that third-party routing doesn't?
+The important point: **these tools exist, they work, and if you've evaluated routing at all you've probably already looked at them.** If OpenRouter is already wired into your stack, "you don't need it, just use one provider" isn't an argument — it's a request to undo working code. The useful question is narrower: what does first-party routing give you that a third-party gateway doesn't?
 
 ---
 
@@ -114,7 +122,66 @@ The differentiation is not that DO routing is better than LiteLLM at routing —
 
 ---
 
-### The Goodput Frame: What You're Actually Optimizing For
+### What the router saves, measured
+
+The case for routing rests on one measurement: the **model-selection tax**. On documented June 2026 runs on `inference.do-ai.run` — same classification prompt, identical token shape (94 in / 80 out), only the model changed:
+
+| Model | Cost / request | vs cheapest |
+|-------|---------------:|------------:|
+| `openai-gpt-oss-20b` | $0.0000407 | baseline |
+| `openai-gpt-5` | $0.0009175 | 22.5× |
+| `anthropic-claude-4.6-sonnet` | $0.0014820 | 36× |
+
+That is a **36× spread on rate alone**. Sending every classify call to Sonnet when a small model clears the accuracy bar costs **$1,037.40/month vs $28.49** at 700K requests. In a documented [cost-governance run](https://www.digitalocean.com/community/tutorials/inference-router-multi-model-api-cost-governance) on a 700K / 250K / 50K classify / Q&A / reasoning mix, router dispatch cut monthly cost **39.6% vs a Sonnet-only baseline and 63.7% vs Opus-only**. Reproduce the per-request delta against your own key:
+
+```bash
+curl -s -X POST "https://inference.do-ai.run/v1/chat/completions" \
+  -H "Authorization: Bearer $MODEL_ACCESS_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openai-gpt-oss-20b",
+    "temperature": 0,
+    "messages": [
+      {"role": "system", "content": "Classify the ticket. Reply with one word: billing, bug, how-to, or account."},
+      {"role": "user", "content": "I was charged twice for my subscription last month."}
+    ]
+  }' | python3 -c "import sys,json; print(json.load(sys.stdin)['usage'])"
+```
+
+Swap in `anthropic-claude-4.6-sonnet` and compare the `usage` block — the delta is the routing tax your bill carries today. Full setup and the `x-model-router-selected-route` response header are in the [Inference Router how-to](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/).
+
+**When to use which routing layer:**
+
+- **First-party (DO Inference Router)** — you run the dominant workload on DO and want routing with no extra latency hop, no separate bill, one dashboard. Best when DO is your primary provider.
+- **Third-party gateway (LiteLLM, OpenRouter)** — you span providers DO doesn't host, or you need a self-hosted proxy with full control over routing logic. Accept the extra hop and dependency.
+- **Single provider, no router** — low volume, one workload class, one model tier. Routing overhead isn't worth it until traffic actually mixes simple and complex tasks.
+
+---
+
+### Routing and prompt caching pull in opposite directions
+
+Here is the tension nobody mentions when they sell you on routing: **every request you route away is a request that doesn't hit a warm cache.**
+
+[Article 3](/blog/prompt-caching) measured this from the other side. Prefix caching cut input cost by roughly 90% — but only because a stable prefix kept landing on the same endpoint, repeatedly, inside the cache TTL. Routing attacks both of those preconditions at once:
+
+- **Different destination, cold cache.** Each provider and each model keeps its own prefix cache. Send the same system prompt to three models and you populate three separate caches, paying the 1.25–2× write premium three times instead of once.
+- **Split traffic, longer gaps.** Split a workload four ways and each destination now sees a quarter of the request rate, so the interval between requests is four times longer. Article 3's measurement was blunt about what happens next: endpoints whose request inter-arrival time exceeds the TTL never accumulate hits at all. A 5-minute TTL that worked comfortably at full volume can stop working entirely at a quarter of it.
+
+The arithmetic decides which effect wins, and it's not close once you look at the two spreads side by side:
+
+| Lever | Order of magnitude | From |
+|-------|-------------------|------|
+| Routing down a model *tier* | up to 36× on the request | measured above |
+| Prefix cache on input tokens | ~10× on the cached portion | [Article 3](/blog/prompt-caching) |
+| Same model, different *provider* | ~2× on the rate | price table above |
+
+**Route across tiers; don't split a tier across providers.** Sending a classification task to a model that costs 36× less is worth far more than any cache you forfeit doing it — and it costs you nothing anyway, because a different task has a different prefix and was never going to share that cache entry. But splitting *one* workload class across providers to chase a ~2× rate difference can hand back a ~10× cache benefit on the input side. That trade is usually a loss, and it's the one teams make by accident when they configure round-robin load balancing across two providers "for resilience" and then wonder why the input bill went up.
+
+Two practical consequences: keep each route dense enough that its traffic still clears the TTL, and treat failover routes as *cold* by definition — the first requests after a failover pay full price on a cache that isn't there yet, which is worth knowing before you size the cost of an outage.
+
+---
+
+### Optimize for goodput, not tokens per second
 
 Most teams think about inference performance in terms of tokens per second or requests per second. These metrics matter, but they're incomplete.
 
@@ -126,7 +193,7 @@ This reframing changes how you think about routing:
 - **TTFT** is a user experience metric, critical for synchronous applications
 - **Cost per correct response at target latency** is the business metric
 
-When you route for goodput, the decision matrix looks different. Groq's LPU delivers 750 tokens/sec on Llama 4 70B output decode — impressive throughput numbers. But if your SLO is 500ms end-to-end latency and Groq's queue depth causes occasional 800ms responses, Groq's throughput numbers don't help you. Route to goodput, not to raw specs.
+When you route for goodput, the decision matrix looks different. Groq's LPU delivers some of the highest output throughput available on Llama 3.3 70B — impressive numbers. But if your SLO is 500ms end-to-end latency and Groq's queue depth causes occasional 800ms responses, Groq's throughput numbers don't help you. Route to goodput, not to raw specs.
 
 ---
 
@@ -140,15 +207,15 @@ The corollary: the only sustainable form of differentiation is performance that'
 
 ---
 
-### The EMEA Opportunity
+### EMEA: serverless inference is US-only today
 
-Among the major pure-play inference providers, there is a meaningful geographic gap. **Together AI, Fireworks AI, and Groq all run serverless inference from US-based data centers only.** For European customers with GDPR requirements, this isn't a preference — it's a compliance blocker. Personal data cannot legally be processed outside the EU/EEA in many contexts.
+Among the major pure-play inference providers, there is a meaningful geographic gap. **Together AI, Fireworks AI, and Groq all run serverless inference from US-based data centers only.** If you have GDPR requirements, this isn't a preference — it's a compliance blocker. Personal data cannot legally be processed outside the EU/EEA in many contexts.
 
 DigitalOcean operates [EU GPU infrastructure in Amsterdam](https://www.digitalocean.com/blog/digitalocean-bare-metal-gpus-eu-data-center) (NVIDIA bare-metal GPUs), which makes EU-resident inference achievable today via **dedicated / self-managed** deployment on that infrastructure.
 
-Be precise about the current state, though: **no provider — including DigitalOcean — currently offers a *serverless* inference endpoint in an EU region.** Serverless inference is US-only across the board right now. So for a GDPR-sensitive European workload today, the realistic path is dedicated inference on EU GPU infrastructure, not serverless. The serverless-in-EU gap is a real opportunity that nobody has filled yet — worth naming as an opportunity rather than claiming as a shipped capability.
+Be precise about the current state, though: **no provider — including DigitalOcean — currently offers a *serverless* inference endpoint in an EU region.** Serverless inference is US-only across the board right now. So for a GDPR-sensitive European workload today, the realistic path is dedicated inference on EU GPU infrastructure, not serverless. The serverless-in-EU gap is a real one that nobody has filled yet — worth naming honestly rather than treating as a shipped capability.
 
-This is worth surfacing explicitly in European enterprise conversations. The question isn't "do you prefer EU data residency?" — it's "can your legal team approve data processing outside the EU?" For a meaningful segment, the answer is no, and the provider options that can serve them are limited.
+If you're building for European users, settle this before you pick an architecture. The question isn't "would you prefer EU data residency?" — it's "can your legal team approve data processing outside the EU?" For a meaningful class of applications the answer is no, and that decision constrains your provider list before any benchmark does.
 
 ---
 
@@ -165,7 +232,7 @@ A minimal resilient architecture:
 
 The routing taxonomy from earlier still applies: use the primary for standard traffic, secondary as failover, and route different workload types to their appropriate tiers. The architecture doesn't need to be complex — a well-configured LiteLLM or Inference Router setup with two provider endpoints covers most cases.
 
-The key principle: **help customers design this architecture rather than argue against it.** A customer who builds a resilient multi-provider architecture and uses DO as the primary endpoint for the dominant workload class is a better long-term relationship than a customer who runs single-provider by pressure and churns when there's an incident.
+The key principle: **design the fallback path deliberately instead of assuming your primary provider will never have a bad day.** A team that builds a resilient multi-provider architecture and keeps one provider as the primary endpoint for its dominant workload class ends up in a better position than a team that runs single-provider on principle and scrambles during the first incident.
 
 ---
 
@@ -176,23 +243,48 @@ The strategic positioning is direct:
 **DO wants to be your primary inference provider and your routing control plane — not your only provider.**
 
 The case for DO as primary:
-- Full-stack integration (inference + compute + vector DB + storage) at 20–40% lower TCO than multi-cloud alternatives, per the Deploy 2026 analysis
+- Full-stack integration (inference + compute + vector DB + storage) at 20–40% lower TCO than multi-cloud alternatives, per DigitalOcean's own [Deploy 2026 analysis](https://www.nasdaq.com/press-release/digitalocean-unveils-ai-native-cloud-built-inference-era-2026-04-28) — vendor-published, so treat it as directional and model your own stack before relying on it
 - First-party routing layer that handles model right-sizing without third-party dependencies
 - EU data residency via dedicated inference on Amsterdam GPU infrastructure (serverless-in-EU is not yet available from any provider, DO included)
 - Single VPC, single billing relationship, integrated observability
 
 The honest acknowledgment of where DO isn't the full answer:
-- Teams that need the absolute latest frontier model on day zero are sourcing direct from Anthropic/OpenAI/Google
-- Teams that need Together AI's depth of open-source model catalog won't find the same breadth on DO
+- If you need the absolute latest frontier model on launch day, you're sourcing direct from Anthropic/OpenAI/Google
+- If you need Together AI's depth of open-source model catalog, you won't find the same breadth on DO
 - Fine-tuning and LoRA workflows need a different provider (Together, Fireworks, Replicate)
 
-The routing architecture is: DO handles the primary workload, batch processing, and EMEA compliance requirements; specialist providers handle their niches through the routing layer. This is not a concession — it's an honest architecture that serves customers better than a single-provider mandate that doesn't fit their actual requirements.
+The routing architecture that follows: DO handles the primary workload, batch processing, and EMEA compliance requirements; specialist providers handle their niches through the routing layer. That's not a concession — it's an honest architecture, and it beats a single-provider mandate that doesn't match what you're actually building.
+
+---
+
+### Common Questions
+
+**Does routing across multiple providers add latency?**
+It depends on where the routing happens. A third-party gateway sits between your application and the model, so you pay one extra network round-trip — typically tens of milliseconds, which matters for a 500ms TTFT budget and doesn't for a batch job. First-party routing inside the inference platform avoids that hop entirely. Measure it on your own traffic before assuming either way; the decision-making time inside a router is usually negligible next to the network path.
+
+**My traffic is low. Do I need a router at all?**
+Probably not. Routing pays off when your traffic actually mixes task complexity — cheap classification alongside expensive reasoning — because the saving comes from *not* sending simple work to the top tier. If you have one workload class on one model tier at modest volume, a router adds operational surface for a saving measured in dollars. Revisit when the traffic mix diversifies or the monthly bill starts to sting.
+
+**How long does it actually take to switch providers?**
+For any provider exposing an OpenAI-compatible API — which is nearly all of them — it's a base URL and an API key. The genuinely slow parts aren't the code: re-validating output quality on your eval set, redoing latency measurements from your region, and re-running whatever security review your organization requires. Budget days for the evaluation, not months for the integration.
+
+**Will a router send requests to a small model when they needed a big one?**
+That's the real failure mode, and it's why observability matters more than the saving. DigitalOcean's Inference Router returns an `x-model-router-selected-route` header on every response, so you can log which model actually served each request and join that against your quality metrics. If a route is misclassifying, you'll see it in that data rather than in user complaints. Route explicitly by model name for anything where a downgrade would be unacceptable, and let the router handle the traffic where it wouldn't.
+
+**Can I run serverless inference in the EU?**
+Not today, and not with any provider. Together AI, Fireworks AI, Groq, and DigitalOcean all serve serverless inference from US data centers. If your data can't leave the EU/EEA, your option is dedicated inference on EU GPU infrastructure — which DigitalOcean has in Amsterdam and several others also offer — not a serverless endpoint. Anyone telling you otherwise is describing a roadmap.
+
+**Can I put those 99.1–99.8% numbers straight into my own SLA?**
+No. Those come from one third-party monitor's 30-day window and are directional at best — your measured availability depends on region, model, and traffic shape. If you're writing an availability commitment to your own customers, derive it from each provider's published status page and contractual SLA, plus your own instrumentation, and size your failover path to cover the gap between what you promise and what any single provider guarantees.
+
+**Isn't first-party routing just a new kind of lock-in?**
+It's weaker than it looks, for the same reason provider lock-in generally is: the router speaks the OpenAI-compatible API, so removing it means pointing your base URL somewhere else. What you'd lose is the routing policy and the single-dashboard observability, not your application code. The thing that would genuinely lock you in is building routing logic against a proprietary, non-portable interface — which is worth checking for in any gateway you adopt, first-party or not.
 
 ---
 
 ### Summary
 
-Multi-provider routing is not a threat to inference providers — it's the architecture that serious teams build. The reasons are structural: no single provider has every model, availability gaps mandate failover, and 6× price spreads make routing economically rational.
+Multi-provider routing is not a threat to inference providers — it's the architecture that serious teams build. The reasons are structural: no single provider has every model, availability gaps mandate failover, and price spreads — modest across providers for one model, dramatic across model tiers — make routing economically rational.
 
 The routing taxonomy that works in practice:
 - Batch/offline → cheapest provider
@@ -201,40 +293,30 @@ The routing taxonomy that works in practice:
 - Compliance-sensitive → certified provider in the right region
 - Fallback → secondary on primary failure
 
-The tools exist (LiteLLM, OpenRouter, Portkey) and sophisticated buyers already know about them. The differentiation from first-party routing is operational: no latency hop, integrated billing and observability, routing logic that lives inside the platform.
+The tools exist (LiteLLM, OpenRouter, Portkey) and you've probably already evaluated them. The differentiation from first-party routing is operational: no latency hop, integrated billing and observability, routing logic that lives inside the platform.
 
 The right frame is goodput — requests completing within SLO with correct output — not raw tokens per second. Route for cost-per-correct-answer at target latency, not cheapest token.
 
-The EMEA position is real: serverless inference is US-only across every provider, so for GDPR-sensitive European customers EU residency today means dedicated inference on EU GPU infrastructure (which DO has in Amsterdam), not serverless. The serverless-in-EU gap remains unfilled by anyone — an opportunity to name honestly, not a capability to claim.
+The EMEA position is real: serverless inference is US-only across every provider, so for GDPR-sensitive European workloads EU residency today means dedicated inference on EU GPU infrastructure (which DO has in Amsterdam), not serverless. The serverless-in-EU gap remains unfilled by anyone — worth naming honestly, not a capability anyone can claim.
 
-The goal: be the primary provider for the dominant workload class, operate as the control plane for routing across providers, and be honest about which workloads belong elsewhere. That's a relationship that lasts.
+The practical goal: pick one provider for the dominant workload class, use its routing layer as your control plane, and stay honest about which workloads belong somewhere else. That's an architecture that survives contact with production.
 
 ---
 
-*This is Article 5 — the final article in a 5-part series on LLM inference in production. [Article 1](article-1-llm-bill-3x.md) covers the hidden anatomy of LLM API costs. [Article 2](article-2-model-selection.md) covers model selection methodology. [Article 3](article-3-prompt-caching.md) goes deep on prompt caching. [Article 4](article-4-full-stack-tco.md) examines total cost of ownership for a full AI stack.*
+*This is Article 5 — the final article in a 5-part series on LLM inference in production. [Article 1](/blog/llm-bill-3x) covers the hidden anatomy of LLM API costs. [Article 2](/blog/choosing-the-right-model) covers model selection methodology. [Article 3](/blog/prompt-caching) goes deep on prompt caching. [Article 4](/blog/full-stack-ai-tco) examines total cost of ownership for a full AI stack.*
 
 ---
 
 ### References
 
 - [Best LLM API Providers in 2026](https://tokenmix.ai/blog/best-llm-api-providers) — TokenMix
-- [AI Inference Providers: Q2 2026 Pricing Matrix](https://www.digitalapplied.com/blog/ai-inference-providers-pricing-matrix-q2-2026) — Digital Applied
 - [DigitalOcean Inference Pricing](https://docs.digitalocean.com/products/inference/details/pricing/) — DigitalOcean (source of the model-tier price ladder)
+- [Groq Pricing](https://groq.com/pricing) / [Fireworks Pricing](https://fireworks.ai/pricing) / [Together Pricing](https://www.together.ai/pricing) — official pricing pages for the Llama 3.3 70B comparison
 - [OpenRouter vs LiteLLM vs Portkey: Best LLM Gateway in 2026](https://toolhalla.ai/blog/openrouter-vs-litellm-vs-portkey-2026) — ToolHalla
 - [Groq vs Together AI vs Fireworks AI](https://toolhalla.ai/blog/groq-vs-together-vs-fireworks-2026) — ToolHalla
 - [Comparing API Providers for Hosted Open-Source LLMs](https://hammansamuel.medium.com/comparing-api-providers-for-hosted-open-source-llms-3a5b2c9982fe) — Medium
+- [Multi-Model API Cost Governance with the Inference Router](https://www.digitalocean.com/community/tutorials/inference-router-multi-model-api-cost-governance) — DigitalOcean (June 2026 live runs)
+- [How to Use Inference Router](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/) — DigitalOcean Documentation
+- [How KV Caching Slashes LLM Inference Costs at Scale](https://www.digitalocean.com/community/conceptual-articles/how-kv-caching-slashes-llm-inference-costs-at-scale) — DigitalOcean
 - [The LLM Inference Trilemma](https://www.digitalocean.com/resources/article/llm-inference-trilemma) — DigitalOcean
 - [AI uptime SLA: why your business needs a multi-model fallback strategy](https://universal.cloud/en/blog/ai-uptime-vergeten-risico/) — Universal.cloud
-
-{/* series-nav */}
-
----
-
-### Series — Inference in Production
-
-- [Series intro — Inference in Production: A Five-Part Field Guide](/blog/inference-in-production)
-- [Part 1 — Why Your LLM Bill Is 3× What You Expected](/blog/llm-bill-3x)
-- [Part 2 — Choosing the Right Model for Your Use Case](/blog/choosing-the-right-model)
-- [Part 3 — Prompt Caching in Practice — From 7% to 74% Hit Rate](/blog/prompt-caching)
-- [Part 4 — The Real TCO of a Full-Stack AI Application](/blog/full-stack-ai-tco)
-- **Part 5 — Multi-Provider Routing Is Not a Problem — It's Your Architecture** (you are here)

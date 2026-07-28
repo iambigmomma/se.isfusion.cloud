@@ -2,44 +2,53 @@
 title: '全端 AI 應用程式的真實總體擁有成本（TCO）'
 description: '每一份供應商比較表都只比較推論的 token 價格。沒有人比較打造一套完整 AI 應用程式的總成本——推論 + 運算 + 資料庫 + 儲存 + 網路 + 可觀測性。真正的數字就藏在那裡。'
 banner: 'full-stack-ai-tco-banner'
-publishedAt: '2026-06-16'
+publishedAt: '2026-07-25'
 tags: 'ai-ml,gen-ai,llm,cost-optimization,architecture'
 ---
-> *利益揭露:我是 DigitalOcean 的 Solutions Architect,所以文中提到 DigitalOcean 產品時,是「業內人的觀點」而非中立第三方——這些地方我都會明確標示,其餘分析則盡量保持廠商中立。以下皆為個人觀點。*
+> *利益揭露：我是 DigitalOcean 的 Solutions Architect，所以文中提到 DigitalOcean 產品時，是「業內人的觀點」而非中立第三方——這些地方我都會明確標示，其餘分析則盡量保持廠商中立。以下皆為個人觀點。*
+
+*一個生產環境 AI 應用在整個技術堆疊上實際要花多少——推論只是其中一部分——附一個可重跑的由下而上模型，以及 DigitalOcean 公布的 Deploy 2026 數字。對「何時 serverless 勝過 dedicated」抱持明確立場。方法本身廠商中立；DO 數字都標明出處。*
 
 ### 前言
 
 一位技術總監在進行供應商評估前問了一個合理的問題：「哪一家推論（inference）供應商的每 token 價格最划算？」
 
-這是個問錯方向的問題。並不是因為 token 定價不重要——它確實重要——而是因為 token 定價頂多只代表營運一套生產級 AI 應用程式總成本的 30–50%。其餘的成本，藏在那些 token 比較試算表從來不會納入的基礎設施裡：後端運算、向量資料庫、物件儲存、容器編排、網路、可觀測性，以及工程師在橫跨三、四個不同雲端平台之間拼湊計費關係所耗費的工時。
+這是個問錯方向的問題——至少是個不完整的問題。並不是因為 token 定價不重要（它確實重要），而是因為 token 定價只是一張有七、八行明細的帳單裡的其中一行。那一行有多大，完全取決於你的架構，而落差大到驚人。在本文後段那個由下而上的模型裡，對一套整合在單一供應商上的 RAG 應用程式來說，推論佔總成本的 **81%**；而同樣的工作負載一旦拆到兩家供應商上，推論就只剩 **34%**。廣為流傳的那個經驗法則——推論佔總成本的 30–50%——描述的是後者：跨多家供應商、又跑著多步驟代理程式的架構，模型呼叫周圍堆滿了基礎設施與營運負擔。它並不描述一套簡單、已整合的部署，在那裡模型呼叫確實就是帳單的大宗。
 
-本文要建構出完整的成本全貌——一套生產級 AI 應用程式在整個技術堆疊上實際的營運成本是多少——並指出 DigitalOcean 的全端定位在哪裡帶來結構性優勢，又在哪裡沒有。
+這兩個數字從相反的方向指向同一個結論。非推論的那些明細——後端運算、向量資料庫、物件儲存、容器編排、網路、可觀測性，以及工程師在橫跨三、四個不同雲端平台之間拼湊計費關係所耗費的工時——從來不會是零，而且在多數團隊實際落腳的那種架構裡，它們就是大宗。這些沒有任何一項會出現在 $/M token 的比較裡。
+
+本文要建構出完整的成本全貌——一套生產環境 AI 應用程式在整個技術堆疊上實際的營運成本是多少——並指出 DigitalOcean 的全端定位在哪裡帶來結構性優勢，又在哪裡沒有。
 
 ### 重點摘要
 
-* token 價格比較並不是 TCO 比較——一旦加上運算、向量資料庫、儲存、編排、網路與營運負擔，推論通常只佔生產級 AI 應用程式成本的 30–50%。
+* token 價格比較並不是 TCO 比較。推論可能佔總成本的 ~30% 到 ~80% 之間，取決於架構——引用任何百分比之前先講清楚你的假設，包括引用那個 30–50% 的時候。
 * 在固定模型等級的前提下，單一供應商整合會在那些永遠不會出現在 $/token 表格裡的成本上勝出：跨供應商的對外流量（egress），以及每家供應商各自的營運負擔。
 * DigitalOcean 在 Deploy 2026 發表的分析中，針對每月 100 萬筆訂單的代理程式：約 $68K/月 vs. 約 $85K（Baseten+AWS）vs. 約 $110K（AWS AgentCore）。
+* serverless 是正確的預設；只有當保留 GPU 在你的使用率下比按 token 帳單便宜時才轉 dedicated，並把能容忍延遲的工作推去 batch。
 * 全端整合對打造完整應用程式的團隊最有價值；對於 API 包裝型產品，或是已深度投入某家超大規模雲（hyperscaler）的團隊，價值則較低。
-* 應該事先誠實揭露的不足：沒有受管的微調/LoRA、開源模型目錄比 Together 窄，而且**歐盟尚無 serverless 推論**（目前歐盟資料落地（data residency）只能透過 dedicated 推論達成）。
-* 不要相信任何供應商的 TCO 表——包括這一份。請使用[搭配的計算器](../../tools/cost-calculator/)，由下而上建立你自己的數字。
+* 應該事先誠實揭露的不足：沒有代管的微調/LoRA、開源模型目錄比 Together 窄，而且**歐盟尚無 serverless 推論**（目前歐盟資料落地（data residency）只能透過 dedicated 推論達成）。
+* 不要相信任何供應商的 TCO 表——包括這一份。請針對你自己的工作負載由下而上重算一次；下面那個模型列出了每一行明細，並標出真正會左右結果的那兩個假設。
 
 ---
 
-### 不完整比較的問題
+### token 價格表只是你帳單裡的一行，不是整張帳單
 
-你在網路上能找到的每一份公開 LLM 定價比較，大致都長這樣：
+你在網路上能找到的每一份公開 LLM 定價比較，大致都長這樣——這裡用*同一個*開源模型（Llama 3.3 70B）在各家 serverless 供應商上的價格來比，讓比較固定在同一個模型等級上，而不是把不同等級混在一起：
 
 | 供應商 | 輸入（$/M tokens） | 輸出（$/M tokens） |
 |----------|-------------------|---------------------|
-| Together AI | $0.18 | $0.18 |
-| Fireworks AI | $0.22 | $0.22 |
 | Groq | $0.59 | $0.79 |
-| Anthropic Claude Sonnet | $3.00 | $15.00 |
+| DigitalOcean | $0.65 | $0.65 |
+| Fireworks AI | $0.90 | $0.90 |
+| Together AI | $1.04 | $1.04 |
+
+*Llama 3.3 70B serverless 牌價，每 1M tokens，擷取時間 2026 年 6 月：[Groq](https://groq.com/pricing)、[DigitalOcean](https://docs.digitalocean.com/products/inference/details/pricing/)、[Fireworks](https://fireworks.ai/pricing)、[Together](https://www.together.ai/pricing)。*
+
+*以上是擷取當下的牌價，而且變動很快——光是 2026 年 5 月，Together 就把這個模型從 $0.88 調到 $1.04。請把這張表當成某一刻的快照，而不是一個常數；在把任何數字寫進預算之前，請對照各家官方定價頁重新確認。*
 
 就其範圍而言，這份比較是準確的。但這就像在比較公寓時，只列出房租，卻略過水電費、停車費、網路費，以及這棟樓的暖氣到底能不能用。標題上的數字看起來很乾淨，實際每月的支出卻高出許多。
 
-一套生產級 AI 應用程式需要：
+一套生產環境 AI 應用程式需要：
 - 一個推論端點（serverless 或 dedicated）
 - 後端應用伺服器（運算）
 - 用於檢索與語意搜尋的向量資料庫
@@ -52,7 +61,7 @@ tags: 'ai-ml,gen-ai,llm,cost-optimization,architecture'
 
 ---
 
-### 參考架構：一套生產級 AI 應用程式實際需要什麼
+### 參考架構：一套生產環境 AI 應用程式實際需要什麼
 
 讓我們用一個有代表性的架構把這件事具體化：一套基於 RAG 的 AI 應用程式，每月服務 100 萬個請求，具備文件知識庫、多輪對話歷史，以及一套監控堆疊。
 
@@ -72,9 +81,23 @@ tags: 'ai-ml,gen-ai,llm,cost-optimization,architecture'
 
 ---
 
-### TCO 數字：規模化的企業差旅代理程式
+### 先用 serverless；只有在使用率撐得起時才轉 dedicated
 
-DigitalOcean 在其 [Deploy 2026 大會](https://www.nasdaq.com/press-release/digitalocean-unveils-ai-native-cloud-built-inference-era-2026-04-28)上，針對一個具代表性的生產級工作負載發表了一份 TCO 比較：一個每月處理 100 萬筆訂單的企業差旅預訂代理程式。這個工作負載需要多輪推理、文件檢索、即時價格查詢，以及合規日誌記錄。
+上面那條「推論」可以用三種方式供應，選哪一種取決於流量形狀：
+
+- **Serverless（按 token 計費）**——變動或尖峰流量、中低量穩態，或任何你想要「閒置零成本」的情況。按 token 付費，閒置時不收費。多數應用與所有非生產環境的正確預設。
+- **Dedicated（按 GPU 小時計費）**——高、穩定、可預測的量，且在你的吞吐量下，一張保留 GPU 的每小時成本除下來比按 token 便宜。這也是目前歐盟資料落地的路徑（serverless 僅限美國），以及 serverless 目錄外模型的路徑。
+- **Batch（非同步，約打 5 折）**——能容忍 24 小時 SLA 的大量、可延遲工作（文件處理、評測、夜間分析）。
+
+原則：先用 serverless；當保留 GPU 在你的使用率下比按 token 帳單更便宜時，把穩定的高量流量搬到 dedicated；把所有非同步工作推去 batch。DO 的 [Serverless vs Dedicated vs Batch Inference](https://www.digitalocean.com/community/tutorials/serverless-vs-dedicated-vs-batch-inference) 與 [Dedicated vs Serverless Inference as You Scale](https://www.digitalocean.com/community/conceptual-articles/dedicated-vs-serverless-inference-at-scale) 有詳細的交叉點計算。
+
+真正的陷阱是太早選 dedicated。一張保留 GPU 不管你有沒有送流量進去，都是一天 24 小時在計費；所以在 10% 使用率下，你等於是為了「帳單固定」這件事，付出十倍的實際每 token 費率。
+
+---
+
+### DigitalOcean Deploy 2026 的數字：同一個代理程式 $68K vs. $85K vs. $110K
+
+DigitalOcean 在其 [Deploy 2026 大會](https://www.nasdaq.com/press-release/digitalocean-unveils-ai-native-cloud-built-inference-era-2026-04-28)上，針對一個具代表性的生產環境工作負載發表了一份 TCO 比較：一個每月處理 100 萬筆訂單的企業差旅預訂代理程式。這個工作負載需要多輪推理、文件檢索、即時價格查詢，以及合規日誌記錄。
 
 **每月成本比較：**
 
@@ -84,7 +107,9 @@ DigitalOcean 在其 [Deploy 2026 大會](https://www.nasdaq.com/press-release/di
 | Baseten + AWS | $84,827 |
 | AWS AgentCore | $110,337 |
 
-![每月 TCO 長條圖：DigitalOcean $67,727、Baseten+AWS $84,827、AWS AgentCore $110,337](https://res.cloudinary.com/iambigmomma/image/upload/v1784186461/blog/full-stack-ai-tco/three_platform_tco.png)
+![Bar chart comparing monthly TCO: DigitalOcean $67,727, Baseten+AWS $84,827, AWS AgentCore $110,337](https://res.cloudinary.com/iambigmomma/image/upload/v1784186461/blog/full-stack-ai-tco/three_platform_tco.png)
+
+*DigitalOcean 公布的 [Deploy 2026](https://www.nasdaq.com/press-release/digitalocean-unveils-ai-native-cloud-built-inference-era-2026-04-28) TCO 比較，情境是每月 100 萬筆訂單的企業差旅代理程式。這是供應商自行公布的數字——請當成起點，並針對你自己的工作負載重建模型。*
 
 在這個工作負載規模下，DigitalOcean 的定價比 Baseten+AWS 便宜 20%，比 AWS AgentCore 便宜 39%。有兩個因素造成這個落差：
 
@@ -94,11 +119,13 @@ DigitalOcean 在其 [Deploy 2026 大會](https://www.nasdaq.com/press-release/di
 
 可以把它想成統包工程（general contracting）。你可以分別僱用一位結構工程師、一位水電工、一位水管工和一位木工——每個人在自己的專業上大概都很出色。或者，你可以僱用一位統包商，由他來協調所有人。每個工種的單項費用，找統包商可能會稍微高一點，但你換來的是單一的責任歸屬、一份要審閱的合約，以及一位早已解決過協調問題的人。對於小型、簡單的整修，分開找各工種沒有問題。但對於有時程壓力的複雜整修，統包商模式在總成本上始終勝出。
 
-![圖鑑式對照：四組分散的供應商工具包，對比一條整合的工具腰帶](https://res.cloudinary.com/iambigmomma/image/upload/v1784186468/blog/full-stack-ai-tco/contractor_vs_trades.png)
+![Field-guide plate contrasting four separate vendor tool-kits with a single unified tool-belt](https://res.cloudinary.com/iambigmomma/image/upload/v1784186468/blog/full-stack-ai-tco/contractor_vs_trades.png)
+
+*四個專業工種、四份合約、四個協調問題——對比一條整合的工具腰帶。決定勝負的從來不是各工種的單價，而是協調成本。*
 
 ### 別只看供應商的數字——自己算一遍
 
-供應商的 TCO 表是一個起點，而不是定論。因此，與其要你相信上面那些數字，這裡提供一個透明、由下而上的模型，讓你可以自己重跑與修改。它計算的是一個更簡單的參考工作負載——一套每月 100 萬個請求的 RAG 應用程式（每個請求約 2,500 個輸入 / 600 個輸出 token），**兩邊都採用相同的開放權重模型等級**，這樣這份比較就能把除了 token 價格*以外*的所有因素隔離出來：
+供應商的 TCO 表是一個起點，而不是定論。因此，與其要你相信上面那些數字，這裡提供一個由下而上的模型，並把每一個輸入值都寫出來，讓你可以自己用試算表重建、並修改你不同意的假設。它計算的是一個更簡單的參考工作負載——一套每月 100 萬個請求的 RAG 應用程式（每個請求約 2,500 個輸入 / 600 個輸出 token），**兩邊都採用相同的開放權重模型等級**，這樣這份比較就能把除了 token 價格*以外*的所有因素隔離出來：
 
 | 細項（每月） | 單一供應商 | 多供應商 |
 |---------------------|----------------:|---------------:|
@@ -112,24 +139,32 @@ DigitalOcean 在其 [Deploy 2026 大會](https://www.nasdaq.com/press-release/di
 | **總計** | **$2,502** | **$5,920** |
 | 推論佔總成本比例 | 81% | 34% |
 
-在這個情境下，單一供應商整合便宜了 **58%**——而且請注意這個落差*來自哪裡*。推論那一行是相同的（同一個模型）。整個差異就是跨供應商的對外流量，以及經營兩家供應商而非一家所帶來的營運負擔——正是 token 價格表所略過的那些成本。另外也請注意，隨著流量上升，固定的營運負擔會被攤平：在每月 500 萬個請求時，同一個模型顯示單一供應商便宜約 24%，這恰好落在 DigitalOcean 公布數字的 20–40% 區間之內。
+*所有輸入值都在這裡，你可以自己重建：推論是每月 100 萬個請求 ×（2,500 輸入 + 600 輸出）token，輸入與輸出都是每百萬 token $0.65——Llama 3.3 70B 在 DO serverless 上，2026 年 6 月——**兩邊**都是 $2,015，因為用的是同一個模型等級。跨供應商對外流量是每月 1,500 GB × 每 GB $0.09 = $135。營運負擔是每月 32 個工程師小時（每多一家供應商 2 天，共兩家）× 每小時綜合成本 $95 = $3,040。其餘各行是兩邊同一類元件的代表性標價。改動其中任何一個，算式就會跟著動——這正是重點。*
 
-![堆疊長條圖：推論只佔總成本少數，基礎設施與營運負擔才是大宗](https://res.cloudinary.com/iambigmomma/image/upload/v1784186462/blog/full-stack-ai-tco/where_cost_lives.png)
+**結論並不建立在營運負擔那一行上。** $3,040 是整張表最有爭議的數字，所以我們直接壓力測試它：把它整個歸零——假裝經營兩家供應商完全不花任何工程時間——單一供應商*仍然*便宜 13%，光靠基礎設施與對外流量就贏了。把它加倍，落差則拉開到 70% 以上。這個假設改變的是答案的幅度，而不是方向。
 
-兩點誠實的提醒：這是一個比 DigitalOcean 企業差旅代理程式情境*更小、更簡單*的工作負載（一個多步驟的代理程式每筆訂單會發出許多次前沿模型呼叫，這就是為什麼它的絕對數字高出許多），而營運負擔這一行則是整份模型中最值得爭論的單一假設——它之所以被設計成一個明確、可調整的輸入值，正是為了讓你能對它提出質疑。重點不在於那個確切的金額；而在於**推論只佔總成本的少數，而大部分的成本都藏在每 token 比較永遠不會顯示的那些層級裡**。完整的模型就在[搭配的計算器](../../tools/cost-calculator/)裡——改變輸入值，你會看到這個結構依然成立。
+現在再看這個落差的其餘部分*來自哪裡*。推論那一行是相同的（同一個模型）。整個差異就是跨供應商的對外流量，以及經營兩家供應商而非一家所帶來的營運負擔——正是 token 價格表所略過的那些成本。另外也請注意，隨著流量上升，固定的營運負擔會被攤平：在每月 500 萬個請求時，同一個模型顯示單一供應商便宜約 24%，這恰好落在 DigitalOcean 公布數字的 20–40% 區間之內。
+
+這張表也正是前言那兩個百分比彼此對得起來的地方。**同一個工作負載、同一個模型，推論在左欄佔總成本 81%，在右欄只佔 34%。** 讓它移動的是「有沒有整合」：一旦把跨供應商對外流量與各家各自的營運負擔拿掉，剩下的部分自然由推論主導。常被引用的「推論佔總成本 30–50%」講的是右欄——一套跨多家供應商的架構，而且通常跑的是多步驟代理程式，每個請求碰到的基礎設施遠比單次 RAG 檢索多。如果有人丟給你一個百分比，卻沒告訴你它來自哪種架構、哪種工作負載，那個數字就不能用。
+
+![Stacked bar chart showing inference as a minority of total cost while infrastructure and operational overhead dominate](https://res.cloudinary.com/iambigmomma/image/upload/v1784186462/blog/full-stack-ai-tco/where_cost_lives.png)
+
+*錢實際上花到哪裡去了。在多供應商那一欄，跨供應商對外流量加上營運負擔——兩者都不會出現在任何 $/M token 表格裡——比所有基礎設施明細加起來還大。*
+
+兩點誠實的提醒：這是一個比 DigitalOcean 企業差旅代理程式情境*更小、更簡單*的工作負載（一個多步驟的代理程式每筆訂單會發出許多次前沿模型呼叫，這就是為什麼它的絕對數字高出許多），而營運負擔這一行——前面已經壓力測試過——之所以被設計成一個明確、可調整的輸入值，正是為了讓你能對它提出質疑。重點不在於那個確切的金額；而在於**真正決定結果的，正是每 token 比較永遠不會顯示的那些層級**。
 
 ---
 
-### 全端整合在哪裡最有價值
+### 全端整合對打造完整應用程式的團隊划算，對 API 包裝型產品不划算
 
 並非每個團隊都能從全端做法中獲得同等的好處。理解它在哪些條件下創造最大價值：
 
 **最有價值的情境：**
 
 - **打造完整應用程式的團隊**——需要整個技術堆疊、而不只是一個推論端點的新創公司與產品團隊。你需要解決的整合問題越少，出貨速度就越快。
-- **有資料落地（data residency）需求的 EMEA 客戶**——主要的純推論供應商（Together AI、Fireworks AI、Groq）只在美國的資料中心提供 serverless 推論。對於受 GDPR 規範的歐洲客戶而言，這是一個合規上的阻礙，而不是偏好問題。DigitalOcean 在[阿姆斯特丹營運歐盟 GPU 基礎設施](https://www.digitalocean.com/blog/digitalocean-bare-metal-gpus-eu-data-center)（NVIDIA 裸機 GPU），因此今天就能在該基礎設施上，透過 **dedicated / 自管** 推論達成歐盟落地的推論。請注意這個誠實的提醒：**截至撰稿時，歐盟區域並沒有 serverless 推論端點**——若要用 serverless，所有供應商（包括 DO）都只有美國區域可選。歐盟落地目前指的是 dedicated，而非 serverless。
+- **有歐盟資料落地（data residency）需求的團隊**——主要的純推論供應商（Together AI、Fireworks AI、Groq）只在美國的資料中心提供 serverless 推論。如果你受 GDPR 規範，這是一個合規上的阻礙，而不是偏好問題。DigitalOcean 在[阿姆斯特丹營運歐盟 GPU 基礎設施](https://www.digitalocean.com/blog/digitalocean-bare-metal-gpus-eu-data-center)（NVIDIA 裸機 GPU），因此今天就能在該基礎設施上，透過 **dedicated / 自管** 推論達成歐盟落地的推論。請注意這個誠實的提醒：**截至撰稿時，歐盟區域並沒有 serverless 推論端點**——若要用 serverless，所有供應商（包括 DO）都只有美國區域可選。歐盟落地目前指的是 dedicated，而非 serverless。
 - **以營運簡化為最佳化目標的團隊**——單一 VPC、單一控制平面、單一支援團隊。對於那些基礎設施複雜度是真實負擔的團隊，整合是划算的。
-- **每月 AI 基礎設施支出在 $50-500K 的中端市場公司**——在這個規模下，多供應商管理的營運負擔已具實質意義，但工程團隊又還沒大到能配置專責的平台工程師來管理每一家供應商關係。
+- **每月 AI 基礎設施支出在 $50-500K 的中型規模團隊**——在這個規模下，多供應商管理的營運負擔已具實質意義，但工程團隊又還沒大到能配置專責的平台工程師來管理每一家供應商關係。
 
 **價值較低的情境：**
 
@@ -139,15 +174,15 @@ DigitalOcean 在其 [Deploy 2026 大會](https://www.nasdaq.com/press-release/di
 
 ---
 
-### 單一帳單的優勢：那些不會出現在試算表裡的東西
+### 整合帶來最大的好處，從來不會出現在試算表上
 
 全端整合的營運效益是真實存在的，但事前很難量化。有幾個一再出現的模式：
 
 **安全攻擊面縮減。** 供應商越少，就有越少的 API 金鑰要輪替、越少的 IAM 設定要維護、越少的稽核日誌要彙整。安全是一項隨供應商數量倍增的成本。
 
-**除錯效率。** 當一起生產事故橫跨你的推論端點、向量資料庫與應用層時，跨三家供應商的日誌與支援團隊去做根因分析，明顯比在單一平台的可觀測性堆疊內追蹤同一起事故要慢得多。
+**除錯效率。** 當一起生產環境事故橫跨你的推論端點、向量資料庫與應用層時，跨三家供應商的日誌與支援團隊去做根因分析，明顯比在單一平台的可觀測性堆疊內追蹤同一起事故要慢得多。
 
-**成本可預測性。** 多供應商架構產生的帳單更難預測——不同的計費週期、不同的定價模型、不同的用量指標。一張採用一致計價單位的帳單，能降低財務團隊的負擔，並讓預算規劃更可靠。
+**成本可預測性。** 多供應商架構產生的帳單更難預測——不同的計費週期、不同的定價模型、不同的用量指標。一張採用一致計價單位的帳單，能降低財務上的負擔，並讓預算規劃更可靠。
 
 **供應商關係的單純性。** 一個客戶團隊、一次企業協議談判、一條支援升級路徑。在規模化之下，這種營運上的簡化具有實質的金錢價值。
 
@@ -157,15 +192,16 @@ DigitalOcean 在其 [Deploy 2026 大會](https://www.nasdaq.com/press-release/di
 
 這個系列文章價值的一部分，在於直接面對不足，而不只是談優點。以下是 DO 還沒有答案的地方：
 
-- **微調與 LoRA。** DO 目前並未針對客製模型變體提供受管的微調。需要把基礎模型調整以適應專有領域資料的團隊——法律、醫療、高度專業的工業領域——必須進行微調，這意味著要麼自行託管，要麼使用有受管微調的供應商（Together AI、Fireworks AI、Replicate）。
-- **開源模型目錄的廣度。** Together AI 擁有市場上最廣的開源模型目錄。對於需要評估數十種開放權重模型變體的團隊，Together 的目錄深度是一項實實在在的優勢。
-- **沒有中東資料中心。** 對於有海灣合作委員會（GCC）資料落地需求的客戶，DO 在該地區沒有可用區（AZ）。
+- **微調與 LoRA。** DO 目前並未針對客製模型變體提供代管的微調。如果你需要把基礎模型調整以適應專有領域資料——法律、醫療、高度專業的工業領域——你就得進行微調，這意味著要麼自行託管，要麼使用有提供代管微調的供應商（Together AI、Fireworks AI、Replicate）。
+- **開源模型目錄的廣度。** Together AI 擁有市場上最廣的開源模型目錄。如果你需要評估數十種開放權重模型變體，Together 的目錄深度是一項實實在在的優勢。
+- **歐盟沒有 serverless 推論。** 上面已經提過，但值得再說一次，因為這是最常讓人在專案進行到一半才踩到的一項：歐盟資料落地目前只能透過 dedicated 推論達成。
+- **沒有中東資料中心。** 如果你有海灣合作委員會（GCC）的資料落地需求，DO 在該地區沒有可用區（AZ）。
 
-這些不足值得在客戶於概念驗證（PoC）中自行發現之前先行揭露。一家對自己做不到的事誠實的供應商，在它做得到的事上會贏得更多信任。
+我寧可你在這裡就看到這些，而不是在概念驗證（PoC）做到一半時才撞上。一家對自己做不到的事誠實的供應商，在它做得到的事上會贏得更多信任。
 
 ---
 
-### 為你的工作負載建立完整的 TCO 全貌
+### 用五個步驟建立你自己的 TCO 比較
 
 在作結之前，這裡提供一個實用的框架，讓你建立自己的 TCO 比較：
 
@@ -179,16 +215,41 @@ DigitalOcean 在其 [Deploy 2026 大會](https://www.nasdaq.com/press-release/di
 
 ---
 
+### 常見問題
+
+**推論到底佔我 AI 帳單的多少比例？**
+取決於你的架構，而且區間大到沒有任何單一數字能安全引用。在上面那個由下而上的模型裡，整合在單一供應商上的 RAG 應用程式，推論佔 **81%**；同樣的工作負載拆到兩家供應商上，就只佔 **34%**——差異完全來自跨供應商對外流量與各家各自的營運負擔。常被引用的 30–50% 描述的是跨多家供應商、又跑多步驟代理程式的架構。請針對你自己的技術堆疊把明細列出來，而不是直接套用任何人的百分比——包括我的。
+
+**我做的是一層薄薄的 API 包裝，全端 TCO 跟我有關嗎？**
+大致上沒有，而且你可以坦然接受這件事。如果你的產品就是一次模型呼叫，沒有向量資料庫、沒有文件儲存、也沒有像樣的應用層，那麼推論確實就是你的帳單，挑一家在你的使用情境下「每塊錢換到最好模型」的供應商，就是正確的最佳化。全端 TCO 是從你加上檢索、持久化對話狀態，或第二家供應商的那一刻開始才變得重要。
+
+**我們已經深度使用 AWS 了，該為了整合而搬家嗎？**
+多半不該整批搬，任何跟你說相反的供應商都是在賣東西。一次遷移會吃掉好幾個原本能拿來做產品的工程月，而且團隊既有的專業是一項真實的資產，這在 TCO 表上不會出現。務實的做法是：把由下而上的模型套用在你*下一個*全新服務上，而不是既有的系統；同時單獨檢查一件事——現有架構的跨供應商對外流量，本身是否已經大到值得為它重新設計架構。
+
+**營運負擔那一行看起來像是掰出來的數字，怎麼估才算誠實？**
+它確實是整份模型中最值得爭論的一行，這也是為什麼它被設計成一個明確的輸入值，而不是被塞進總計裡。站得住腳的估法是：把你每多一家供應商就會重複發生的工作列出來——金鑰輪替、IAM／安全設定、帳單對帳、跨供應商的事故分流、隨著 API 變動維持整合程式碼能動——然後實際計時一個月。多數團隊會落在每多一家供應商、每月一到三個工程人日之間。接著用你估出來的下限與上限各跑一次模型；如果結論在兩者之間翻轉，就代表這個假設扛了太多重量，你需要真實資料才能下判斷。
+
+**你的模型說便宜 58%，DigitalOcean 公布的數字卻是 20–39%，哪個才對？**
+兩個都對，只是工作負載與量級不同。58% 來自每月 100 萬個請求的小型、簡單 RAG 應用程式——在那裡，一個固定的營運負擔相對於不高的基礎設施帳單顯得很大。DigitalOcean 的 Deploy 2026 情境則是多步驟代理程式，每筆訂單會發出許多次前沿模型呼叫，所以推論那一行大得多，固定負擔的佔比相對就小。把同一個由下而上的模型跑在每月 500 萬個請求上，結果會收斂到約 24%——落在 DO 公布的區間內。兩組數字之間的差距是規模效應，不是矛盾。
+
+**serverless 還是 dedicated，我到底該怎麼決定？**
+先用 serverless，因為閒置容量不會花你錢，你也不必去預測還沒發生過的流量。只有在兩種情況下才把工作負載搬到 dedicated：你的穩態吞吐量已經讓保留 GPU 的每小時成本比等量的按 token 帳單更便宜，或是有需求硬性要求（歐盟資料落地與 serverless 目錄外的模型都屬於這類）。任何能容忍延遲的工作就推去 batch，大約半價。常見又昂貴的錯誤，是為了「帳單可預測」太早買下 dedicated 容量，然後讓它在 10% 使用率下空轉。
+
+**DigitalOcean 今天有哪些做不到？**
+有三件事值得你在投入前先知道：沒有代管的微調或 LoRA，所以客製模型變體意味著自行託管，或改用 Together、Fireworks、Replicate 這類供應商；開源模型目錄比 Together 窄，如果你需要評估數十種開放權重變體，這會有影響；以及**歐盟沒有 serverless 推論**，所以歐盟資料落地目前只能靠阿姆斯特丹 GPU 基礎設施上的 dedicated 推論。另外也沒有中東區域。這些都不是假設性的路線圖但書——它們是當下的狀態，而且是最容易在概念驗證後期才浮現的限制。
+
+---
+
 ### 總結
 
-token 定價比較並不是 TCO 比較。一套完整的 AI 應用程式，其營運成本是推論支出的 2–3 倍——當你把每一次生產級部署都需要的運算、儲存、網路、資料庫與營運負擔都算進去之後。
+token 定價比較並不是 TCO 比較。一套完整的 AI 應用程式，其營運成本比推論支出高出多少，取決於它是怎麼組起來的：在上面那個由下而上的模型裡，整合在單一供應商上的 RAG 堆疊，總成本是推論支出的 **1.24 倍**；而同樣的工作負載拆到兩家供應商上，會達到 **2.9 倍**。差異完全來自運算、儲存、網路、資料庫、對外流量與營運負擔——這些沒有任何一項會出現在 $/M token 表格裡。
 
-Deploy 2026 針對每月 100 萬筆訂單的企業差旅代理程式所做的 TCO 分析：
+[Deploy 2026](https://www.nasdaq.com/press-release/digitalocean-unveils-ai-native-cloud-built-inference-era-2026-04-28) 針對每月 100 萬筆訂單的企業差旅代理程式所做的 TCO 分析：
 - DigitalOcean AI-Native Cloud：**$67,727/月**
 - Baseten + AWS：**$84,827/月**（多 25%）
 - AWS AgentCore：**$110,337/月**（多 63%）
 
-全端優勢來自三個地方：沒有跨供應商的對外流量費用、整合後的營運負擔，以及單一的計費關係。它對打造完整應用程式的團隊、有 GDPR 需求的 EMEA 客戶，以及基礎設施複雜度是真實負擔的中端市場公司，最有價值。
+全端優勢來自三個地方：沒有跨供應商的對外流量費用、整合後的營運負擔，以及單一的計費關係。它對打造完整應用程式的團隊、有歐盟資料落地需求的團隊，以及基礎設施複雜度是真實負擔的中型規模團隊，最有價值。
 
 而它對已深度投資現有超大規模雲的團隊、純 API 包裝型產品，或需要在第零天就取得前沿模型的工作負載，價值較低。
 
@@ -196,7 +257,7 @@ Deploy 2026 針對每月 100 萬筆訂單的企業差旅代理程式所做的 TC
 
 ---
 
-*這是「生產環境中的 LLM 推論」五篇系列文章的第 4 篇。[第 1 篇](article-1-llm-bill-3x.md)談 LLM API 成本隱藏的內部結構。[第 2 篇](article-2-model-selection.md)談模型選擇方法論。[第 3 篇](article-3-prompt-caching.md)深入探討 prompt 快取（cache）。[第 5 篇](article-5-multi-provider-routing.md)談多供應商路由架構。*
+*這是「生產環境中的 LLM 推論」五篇系列文章的第 4 篇。[第 1 篇](/blog/zh-llm-bill-3x)談 LLM API 成本隱藏的內部結構。[第 2 篇](/blog/zh-choosing-the-right-model)談模型選擇方法論。[第 3 篇](/blog/zh-prompt-caching)深入探討 prompt 快取（cache）。[第 5 篇](/blog/zh-multi-provider-routing)談多供應商路由架構。*
 
 ---
 
@@ -206,18 +267,11 @@ Deploy 2026 針對每月 100 萬筆訂單的企業差旅代理程式所做的 TC
 - [Serverless Inference with the DigitalOcean AI Platform](https://www.digitalocean.com/community/tutorials/serverless-inference-gradient) — DigitalOcean
 - [Inference Pricing](https://docs.digitalocean.com/products/inference/details/pricing/) — DigitalOcean Documentation
 - [What's New on DigitalOcean's Inference Engine](https://www.digitalocean.com/blog/whats-new-on-gradient-ai-platform) — DigitalOcean
+- [Serverless vs Dedicated vs Batch Inference](https://www.digitalocean.com/community/tutorials/serverless-vs-dedicated-vs-batch-inference) — DigitalOcean
+- [Dedicated vs Serverless Inference as You Scale](https://www.digitalocean.com/community/conceptual-articles/dedicated-vs-serverless-inference-at-scale) — DigitalOcean
+- [DigitalOcean Bare Metal GPUs in the EU](https://www.digitalocean.com/blog/digitalocean-bare-metal-gpus-eu-data-center) — DigitalOcean
+- [Groq Pricing](https://groq.com/pricing) — Groq
+- [Fireworks AI Pricing](https://fireworks.ai/pricing) — Fireworks AI
+- [Together AI Pricing](https://www.together.ai/pricing) — Together AI
 - [Best Inference Providers for AI Agents in 2026](https://fast.io/resources/best-inference-providers-ai-agents/) — Fastio
 - [Vector Storage Costs: S3, OpenSearch, pgvector, Pinecone](https://darryl-ruggles.cloud/the-real-cost-of-vector-storage-s3-vectors-vs-opensearch-vs-pgvector-vs-pinecone/) — Darryl Ruggles
-
-{/* series-nav */}
-
----
-
-### 系列文章 — Inference in Production
-
-- [系列前言 — Inference in Production：五篇實戰指南](/blog/zh-inference-in-production)
-- [第 1 篇 — 為什麼你的 LLM 帳單是預期的 3 倍](/blog/zh-llm-bill-3x)
-- [第 2 篇 — 為你的使用情境選擇正確的模型](/blog/zh-choosing-the-right-model)
-- [第 3 篇 — 提示快取實戰——從 7% 到 74% 命中率](/blog/zh-prompt-caching)
-- **第 4 篇 — 全端 AI 應用程式的真實 TCO** （你正在這裡）
-- [第 5 篇 — 多供應商路由不是問題——它就是你的架構](/blog/zh-multi-provider-routing)

@@ -2,40 +2,49 @@
 title: 'The Real TCO of a Full-Stack AI Application'
 description: 'Every provider comparison only compares inference token prices. Nobody compares the total cost of building a complete AI application — inference + compute + database + storage + networking + observability. That''s where the real number lives.'
 banner: 'full-stack-ai-tco-banner'
-publishedAt: '2026-06-16'
+publishedAt: '2026-07-25'
 tags: 'ai-ml,gen-ai,llm,cost-optimization,architecture'
 ---
 > *Disclosure: I'm a Solutions Architect at DigitalOcean, so when I mention DigitalOcean products it's an informed-insider view, not a neutral one — I flag those moments clearly and keep the analysis vendor-neutral wherever the topic allows. The opinions here are my own.*
+
+*What a production AI application actually costs across the full stack — inference is only part of it — with a reproducible bottom-up model and DigitalOcean's published Deploy 2026 figures. Opinionated on when serverless beats dedicated. The method is vendor-neutral; DO numbers are cited to source.*
 
 ### Introduction
 
 A technology director asked a reasonable question before a vendor evaluation: "Which inference provider has the best price per token?"
 
-It's the wrong question. Not because token pricing doesn't matter — it does — but because token pricing represents, at best, 30–50% of the total cost of running a production AI application. The remaining cost lives in the infrastructure that the token comparison spreadsheets never include: backend compute, vector databases, object storage, container orchestration, networking, observability, and the engineering hours spent stitching together billing relationships across three or four different cloud platforms.
+It's the wrong question — or at least an incomplete one. Not because token pricing doesn't matter (it does), but because token pricing is a single line in a bill that has seven or eight lines. How big that line is depends entirely on your architecture, and the spread is enormous. In the bottom-up model later in this article, inference is **81%** of total cost for a consolidated single-provider RAG app, and only **34%** for the identical workload split across two providers. The widely quoted rule of thumb — inference is 30–50% of total cost — describes the second world: multi-provider stacks running multi-step agent workloads, where infrastructure and operational overhead pile up around the model call. It does not describe a simple, consolidated deployment, where the model call really is most of the bill.
+
+Both numbers point at the same conclusion from opposite directions. The non-inference lines — backend compute, vector databases, object storage, container orchestration, networking, observability, and the engineering hours spent stitching billing relationships together across three or four cloud platforms — are never zero, and in the architectures most teams actually end up with, they are the majority. None of them appear in a $/M token comparison.
 
 This article builds the full cost picture — what a production AI application actually costs to run across its entire stack — and where DigitalOcean's full-stack positioning creates a structural advantage, and where it doesn't.
 
 ### Key Takeaways
 
-* Token-price comparisons are not TCO comparisons — inference is typically only 30–50% of the cost of a production AI application once you add compute, vector DB, storage, orchestration, networking, and operational overhead.
+* Token-price comparisons are not TCO comparisons. Inference can be anywhere from ~30% to ~80% of total cost depending on architecture — state your assumptions before quoting a percentage, including when you quote the 30–50% figure.
 * Holding the model class constant, single-provider consolidation wins on the costs that never appear in $/token tables: cross-provider egress and per-provider operational overhead.
 * DigitalOcean's published Deploy 2026 analysis for a 1M-bookings/month agent: ~$68K/mo vs. ~$85K (Baseten+AWS) vs. ~$110K (AWS AgentCore).
+* Serverless is the right default; move to dedicated only when a reserved GPU beats your per-token bill at your utilization, and push latency-tolerant work to batch.
 * Full-stack consolidation matters most for teams building complete applications; it matters less for API-wrapper products or teams already deep in a hyperscaler.
 * Honest gaps to disclose up front: no managed fine-tuning/LoRA, a narrower open-source catalog than Together, and **no serverless inference in the EU yet** (EU data residency currently means dedicated inference only).
-* Don't trust any vendor's TCO table — including this one. Use the [companion calculator](../../tools/cost-calculator/) to build your own bottom-up number.
+* Don't trust any vendor's TCO table — including this one. Rebuild it bottom-up for your own workload; the model below shows every line item and flags the two assumptions that actually swing the result.
 
 ---
 
-### The Incomplete Comparison Problem
+### A Token-Price Table Is One Line of Your Bill, Not Your Bill
 
-Every public LLM pricing comparison you'll find online looks roughly like this:
+Every public LLM pricing comparison you'll find online looks roughly like this — here, the *same* open model (Llama 3.3 70B) priced across serverless providers, so the comparison holds model class constant instead of mixing tiers:
 
 | Provider | Input ($/M tokens) | Output ($/M tokens) |
 |----------|-------------------|---------------------|
-| Together AI | $0.18 | $0.18 |
-| Fireworks AI | $0.22 | $0.22 |
 | Groq | $0.59 | $0.79 |
-| Anthropic Claude Sonnet | $3.00 | $15.00 |
+| DigitalOcean | $0.65 | $0.65 |
+| Fireworks AI | $0.90 | $0.90 |
+| Together AI | $1.04 | $1.04 |
+
+*Llama 3.3 70B serverless list prices, per 1M tokens, captured June 2026: [Groq](https://groq.com/pricing), [DigitalOcean](https://docs.digitalocean.com/products/inference/details/pricing/), [Fireworks](https://fireworks.ai/pricing), [Together](https://www.together.ai/pricing).*
+
+*These are list prices at the time of capture, and they move fast — Together raised this model from $0.88 to $1.04 in May 2026 alone. Treat the table as a snapshot, not a constant, and re-check every provider's official pricing page before you put a number in a budget.*
 
 This comparison is accurate as far as it goes. But it's like comparing apartments by listing only the rent, while leaving out utilities, parking, internet, and whether the building has working heat. The headline number looks clean. The actual monthly outlay is much higher.
 
@@ -72,7 +81,21 @@ On a hyperscaler or multi-provider setup, each of these layers lives in a differ
 
 ---
 
-### The TCO Numbers: A Corporate Travel Agent at Scale
+### Start on Serverless; Move to Dedicated Only When Utilization Justifies It
+
+The inference line above can be served three ways, and the right choice depends on traffic shape:
+
+- **Serverless (per-token)** — variable or spiky traffic, low-to-moderate steady volume, or whenever you want zero idle cost. You pay per token and nothing when idle. The right default for most applications and all non-prod.
+- **Dedicated (GPU-hour)** — high, steady, predictable volume where a reserved GPU's hourly cost divided by your throughput beats the per-token rate. Also the path for EU data residency today (serverless is US-only) and for models outside the serverless catalog.
+- **Batch (async, ~50% off)** — latency-tolerant bulk jobs (document processing, evals, nightly analytics) that tolerate a 24-hour SLA.
+
+Rule of thumb: start serverless; move steady high-volume traffic to dedicated once a reserved GPU is cheaper than the per-token bill at your utilization; push everything async to batch. DO's [Serverless vs Dedicated vs Batch Inference](https://www.digitalocean.com/community/tutorials/serverless-vs-dedicated-vs-batch-inference) and [Dedicated vs Serverless Inference as You Scale](https://www.digitalocean.com/community/conceptual-articles/dedicated-vs-serverless-inference-at-scale) work through the crossover math.
+
+The trap is picking dedicated too early. A reserved GPU bills 24 hours a day whether or not you send it traffic, so at 10% utilization you are paying ten times the effective per-token rate for the privilege of a fixed bill.
+
+---
+
+### DigitalOcean's Deploy 2026 Numbers: $68K vs. $85K vs. $110K for the Same Agent
 
 DigitalOcean published a TCO comparison at its [Deploy 2026 conference](https://www.nasdaq.com/press-release/digitalocean-unveils-ai-native-cloud-built-inference-era-2026-04-28) for a representative production workload: a corporate travel booking agent handling 1 million bookings per month. The workload requires multi-turn reasoning, document retrieval, real-time pricing lookups, and compliance logging.
 
@@ -86,6 +109,8 @@ DigitalOcean published a TCO comparison at its [Deploy 2026 conference](https://
 
 ![Bar chart comparing monthly TCO: DigitalOcean $67,727, Baseten+AWS $84,827, AWS AgentCore $110,337](https://res.cloudinary.com/iambigmomma/image/upload/v1784186461/blog/full-stack-ai-tco/three_platform_tco.png)
 
+*DigitalOcean's published [Deploy 2026](https://www.nasdaq.com/press-release/digitalocean-unveils-ai-native-cloud-built-inference-era-2026-04-28) TCO comparison for a 1M-bookings/month corporate travel agent. These are vendor-published figures — treat them as a starting point, and rebuild the model for your own workload.*
+
 The DigitalOcean pricing is 20% less than Baseten+AWS and 39% less than AWS AgentCore at this workload level. Two factors drive this gap:
 
 **Egress fees between layers.** When your inference endpoint, vector database, and application tier live in different providers' networks, data moving between them generates egress charges. On a single-provider architecture, intra-datacenter traffic is typically free or near-free.
@@ -96,9 +121,11 @@ Think of it like general contracting. You can hire a structural engineer, an ele
 
 ![Field-guide plate contrasting four separate vendor tool-kits with a single unified tool-belt](https://res.cloudinary.com/iambigmomma/image/upload/v1784186468/blog/full-stack-ai-tco/contractor_vs_trades.png)
 
+*Four specialists, four contracts, four coordination problems — versus one tool-belt. The per-trade rate isn't the number that decides this; the coordination cost is.*
+
 ### Don't Take the Vendor's Number — Build Your Own
 
-A vendor's TCO table is a starting point, not a verdict. So rather than ask you to trust the figures above, here is a transparent bottom-up model you can re-run and modify yourself. It prices a simpler reference workload — a RAG application at 1M requests/month (~2,500 input / 600 output tokens each), the **same open-weight model class on both sides** so the comparison isolates everything *except* token price:
+A vendor's TCO table is a starting point, not a verdict. So rather than ask you to trust the figures above, here is a bottom-up model with every input stated, so you can rebuild it in a spreadsheet and change the assumptions you disagree with. It prices a simpler reference workload — a RAG application at 1M requests/month (~2,500 input / 600 output tokens each), the **same open-weight model class on both sides** so the comparison isolates everything *except* token price:
 
 | Line item (monthly) | Single-provider | Multi-provider |
 |---------------------|----------------:|---------------:|
@@ -112,34 +139,42 @@ A vendor's TCO table is a starting point, not a verdict. So rather than ask you 
 | **Total** | **$2,502** | **$5,920** |
 | Inference as % of total | 81% | 34% |
 
-In this scenario, single-provider consolidation runs **58% cheaper** — and notice *where* the gap comes from. The inference line is identical (same model). The entire difference is cross-provider egress and the operational overhead of running two providers instead of one — exactly the costs that token-price tables omit. Note also that as volume rises, the fixed ops overhead amortizes: at 5M requests/month the same model shows single-provider ~24% cheaper, which lands squarely inside the 20–40% range of DigitalOcean's published figures.
+*Every input, so you can rebuild this yourself: inference is 1M requests × (2,500 input + 600 output) tokens at $0.65/M in and out — Llama 3.3 70B on DO serverless, June 2026 — which is $2,015 on **both** sides, since it's the same model class. Cross-provider egress is 1,500 GB/month at $0.09/GB = $135. Operational overhead is 32 engineer-hours/month (two days per extra provider relationship, two of them) at a $95/hour loaded cost = $3,040. The remaining lines are representative list prices for the same component class on each side. Change any of these and the arithmetic moves — that's the point.*
+
+**The conclusion doesn't rest on the overhead line.** That $3,040 is the most arguable number in the table, so test it: zero it out entirely — pretend running two providers costs no engineering time at all — and single-provider is *still* 13% cheaper on infrastructure and egress alone. Double it and the gap widens past 70%. The overhead assumption changes the size of the answer, not its direction.
+
+Now notice *where* the rest of the gap comes from. The inference line is identical (same model). The entire difference is cross-provider egress and the operational overhead of running two providers instead of one — exactly the costs that token-price tables omit. Note also that as volume rises, the fixed ops overhead amortizes: at 5M requests/month the same model shows single-provider ~24% cheaper, which lands squarely inside the 20–40% range of DigitalOcean's published figures.
+
+This table is also where the two percentages from the introduction reconcile. **Inference is 81% of total cost in the left column and 34% in the right column, for the same workload and the same model.** Consolidation is what moves it: strip out cross-provider egress and per-provider ops overhead, and inference dominates what's left. The commonly quoted "inference is 30–50% of total cost" is a statement about the right column — a multi-provider stack, usually running a multi-step agent that touches more infrastructure per request than a single RAG lookup does. If someone quotes you a percentage without telling you which architecture and which workload it came from, the number is unusable.
 
 ![Stacked bar chart showing inference as a minority of total cost while infrastructure and operational overhead dominate](https://res.cloudinary.com/iambigmomma/image/upload/v1784186462/blog/full-stack-ai-tco/where_cost_lives.png)
 
-Two honest caveats: this is a *smaller, simpler* workload than DigitalOcean's corporate-travel-agent scenario (a multi-step agent makes many frontier-model calls per booking, which is why its absolute numbers are far higher), and the operational-overhead line is the single most debatable assumption — it's an explicit, adjustable input precisely so you can argue with it. The point isn't the exact dollar figure; it's that **inference is a minority of total cost, and the majority lives in layers the per-token comparison never shows**. The full model is in the [companion calculator](../../tools/cost-calculator/) — change the inputs and watch the structure hold.
+*Where the money actually goes. In the multi-provider column, cross-provider egress and operational overhead — neither of which appears in any $/M token table — are larger than every infrastructure line combined.*
+
+Two honest caveats: this is a *smaller, simpler* workload than DigitalOcean's corporate-travel-agent scenario (a multi-step agent makes many frontier-model calls per booking, which is why its absolute numbers are far higher), and the operational-overhead line — stress-tested above — is an explicit, adjustable input precisely so you can argue with it. The point isn't the exact dollar figure; it's that **the layers a per-token comparison never shows are the ones that decide the outcome**.
 
 ---
 
-### Where Full-Stack Bundling Matters Most
+### Consolidation Pays for Teams Building Whole Applications, Not for API Wrappers
 
 Not every team benefits equally from a full-stack approach. Understanding the conditions where it creates the most value:
 
 **Where it matters most:**
 
 - **Teams building complete applications** — startups and product teams that need the full stack, not just an inference endpoint. The fewer integration problems you need to solve, the faster you ship.
-- **EMEA customers with data residency requirements** — the major pure-play inference providers (Together AI, Fireworks AI, Groq) run serverless inference from US-based data centers only. For GDPR-sensitive European customers, this is a compliance blocker, not a preference. DigitalOcean operates [EU GPU infrastructure in Amsterdam](https://www.digitalocean.com/blog/digitalocean-bare-metal-gpus-eu-data-center) (NVIDIA bare-metal GPUs), so EU-resident inference is achievable today via **dedicated / self-managed** inference on that infrastructure. Note the honest caveat: there is **no serverless inference endpoint in the EU region at the time of writing** — for serverless, US regions are the only option across all providers including DO. EU residency currently means dedicated, not serverless.
+- **Teams with EU data-residency requirements** — the major pure-play inference providers (Together AI, Fireworks AI, Groq) run serverless inference from US-based data centers only. If you're subject to GDPR, that's a compliance blocker, not a preference. DigitalOcean operates [EU GPU infrastructure in Amsterdam](https://www.digitalocean.com/blog/digitalocean-bare-metal-gpus-eu-data-center) (NVIDIA bare-metal GPUs), so EU-resident inference is achievable today via **dedicated / self-managed** inference on that infrastructure. Note the honest caveat: there is **no serverless inference endpoint in the EU region at the time of writing** — for serverless, US regions are the only option across all providers including DO. EU residency currently means dedicated, not serverless.
 - **Teams optimizing for operational simplicity** — a single VPC, single control plane, single support team. For teams where infrastructure complexity is a real burden, consolidation pays.
-- **Mid-market companies with $50-500K/month AI infrastructure spend** — at this scale, the operational overhead of multi-provider management is meaningful, but the engineering team isn't large enough to have dedicated platform engineers managing each vendor relationship.
+- **Mid-market teams with $50-500K/month AI infrastructure spend** — at this scale, the operational overhead of multi-provider management is meaningful, but the engineering team isn't large enough to have dedicated platform engineers managing each vendor relationship.
 
 **Where it matters less:**
 
-- **Teams with existing AWS or GCP infrastructure investments** — if your application already runs on a hyperscaler and your teams have deep expertise there, adding an inference endpoint is a bolt-on, not a full migration. The switching cost is high; the marginal benefit from consolidation is lower.
+- **Teams with existing AWS or GCP infrastructure investments** — if your application already runs on a hyperscaler and your team has deep expertise there, adding an inference endpoint is a bolt-on, not a full migration. The switching cost is high; the marginal benefit from consolidation is lower.
 - **Workloads where a single API call is the entire product** — if you're building a thin wrapper over a frontier model with no vector database, no document storage, no application tier to speak of, the full-stack story doesn't apply. Just pick the inference provider with the best model for your use case.
 - **Teams that need specialized frontier models** — DO's open-source model catalog is solid for open-weight models, but if your workload requires the absolute latest frontier model the day it launches, closed-API providers (Anthropic, OpenAI direct) are the natural choice, with DO potentially used for the non-inference infrastructure.
 
 ---
 
-### The One-Bill Advantage: What Doesn't Show Up in Spreadsheets
+### The Biggest Consolidation Wins Never Reach the Spreadsheet
 
 The operational benefits of full-stack consolidation are real but hard to quantify in advance. A few patterns that consistently appear:
 
@@ -147,7 +182,7 @@ The operational benefits of full-stack consolidation are real but hard to quanti
 
 **Debugging efficiency.** When a production incident spans your inference endpoint, your vector database, and your application tier, root cause analysis across three providers' logs and support teams is meaningfully slower than tracing the same incident inside one platform's observability stack.
 
-**Cost predictability.** Multi-provider architectures generate bills that are harder to forecast — different billing cycles, different pricing models, different usage metrics. A single bill with consistent pricing units reduces finance team overhead and makes budget planning more reliable.
+**Cost predictability.** Multi-provider architectures generate bills that are harder to forecast — different billing cycles, different pricing models, different usage metrics. A single bill with consistent pricing units reduces finance overhead and makes budget planning more reliable.
 
 **Vendor relationship simplicity.** One account team, one enterprise agreement negotiation, one support escalation path. At scale, this operational simplification has real dollar value.
 
@@ -157,15 +192,16 @@ The operational benefits of full-stack consolidation are real but hard to quanti
 
 Part of the value of this article series is being direct about gaps, not just strengths. Where DO doesn't have an answer:
 
-- **Fine-tuning and LoRA.** DO does not currently offer managed fine-tuning for custom model variants. Teams that need to adapt a base model to proprietary domain data — legal, medical, highly specialized industrial — need to fine-tune, which means either self-hosting or using a provider with managed fine-tuning (Together AI, Fireworks AI, Replicate).
-- **Open-source model catalog breadth.** Together AI has the broadest open-source model catalog in the market. For teams that need to evaluate dozens of open-weight model variants, Together's catalog depth is a genuine advantage.
-- **No Middle East data center.** For customers with Gulf Cooperation Council data residency requirements, DO doesn't have an AZ in the region.
+- **Fine-tuning and LoRA.** DO does not currently offer managed fine-tuning for custom model variants. If you need to adapt a base model to proprietary domain data — legal, medical, highly specialized industrial — you'll need to fine-tune, which means either self-hosting or using a provider with managed fine-tuning (Together AI, Fireworks AI, Replicate).
+- **Open-source model catalog breadth.** Together AI has the broadest open-source model catalog in the market. If you need to evaluate dozens of open-weight model variants, Together's catalog depth is a genuine advantage.
+- **No serverless inference in the EU.** Covered above, and worth repeating because it's the one that surprises people mid-project: EU data residency currently means dedicated inference only.
+- **No Middle East data center.** If you have Gulf Cooperation Council data-residency requirements, DO doesn't have an AZ in the region.
 
-These gaps are worth disclosing before customers discover them in a proof of concept. A vendor that's honest about what they can't do earns more trust on what they can.
+I'd rather you find these here than in the middle of a proof of concept. A vendor that's honest about what it can't do earns more trust on what it can.
 
 ---
 
-### Building the Full TCO Picture for Your Workload
+### Build Your Own TCO Comparison in Five Steps
 
 Before concluding, here's a practical framework for building your own TCO comparison:
 
@@ -179,16 +215,41 @@ The answer won't always favor full-stack consolidation. But the teams that do th
 
 ---
 
+### Common Questions
+
+**What percentage of my AI bill is actually inference?**
+It depends on your architecture, and the range is wide enough that no single number is safe to quote. In the bottom-up model above, inference is **81%** of total cost for a consolidated single-provider RAG app and **34%** for the identical workload split across two providers — the difference is entirely cross-provider egress and per-provider ops overhead. The commonly cited 30–50% describes multi-provider stacks running multi-step agent workloads. Build the line-item list for your own stack rather than adopting anyone's percentage, including mine.
+
+**I'm building a thin API wrapper. Does full-stack TCO matter to me?**
+Mostly no, and you should feel fine about that. If your product is one model call with no vector database, no document store, and no meaningful application tier, then inference genuinely is your bill, and picking the provider with the best model-per-dollar for your use case is the correct optimization. Full-stack TCO starts to matter the moment you add retrieval, persistent conversation state, or a second provider.
+
+**We're already deep in AWS. Should we migrate to consolidate?**
+Probably not wholesale, and any vendor telling you otherwise is selling. A migration costs engineering months you'd otherwise spend on product, and your team's existing expertise is a real asset that doesn't appear in a TCO table. The pragmatic version is to run the bottom-up model on your *next* greenfield service rather than your existing estate, and to check whether cross-provider egress on your current architecture is large enough to be worth re-architecting around on its own.
+
+**The operational-overhead line looks like a made-up number. How do I estimate it honestly?**
+It is the most debatable line in the model, which is why it's an explicit input rather than baked into a total. The defensible way to estimate it: count the recurring per-provider tasks you actually do — key rotation, IAM/security config, billing reconciliation, cross-provider incident triage, keeping integration code working through API changes — and time them for a month. Most teams land somewhere between one and three engineer-days per month per additional provider. Then run the model at your low and high estimates; if the conclusion flips between them, the overhead assumption is doing too much work and you need real data before deciding.
+
+**Your model says 58% cheaper, but DigitalOcean's published figures say 20–39%. Which is right?**
+Both, for different workloads and volumes. The 58% comes from a small, simple RAG app at 1M requests/month, where a fixed ops-overhead line is large relative to a modest infrastructure bill. DigitalOcean's Deploy 2026 scenario is a multi-step agent making many frontier-model calls per booking, so the inference line is much larger and the fixed overhead is proportionally smaller. Run the same bottom-up model at 5M requests/month and it converges to ~24% — inside DO's published range. The gap between the numbers is a scale effect, not a contradiction.
+
+**Serverless or dedicated — how do I actually decide?**
+Start serverless, because idle capacity costs you nothing and you don't have to forecast traffic you haven't seen yet. Move a workload to dedicated only when your steady-state throughput makes a reserved GPU's hourly cost cheaper than the equivalent per-token bill, or when a requirement forces it — EU data residency and models outside the serverless catalog both do. Push anything latency-tolerant to batch for roughly half price. The common expensive mistake is buying dedicated capacity early for predictability and then running it at 10% utilization.
+
+**What can't DigitalOcean do today?**
+Three things worth knowing before you commit: there's no managed fine-tuning or LoRA, so custom model variants mean self-hosting or a provider like Together, Fireworks, or Replicate; the open-source model catalog is narrower than Together's, which matters if you need to evaluate dozens of open-weight variants; and there's **no serverless inference in the EU**, so EU data residency currently means dedicated inference on the Amsterdam GPU infrastructure. There's also no Middle East region. None of these are hypothetical roadmap caveats — they're the current state, and they're the constraints most likely to surface late in a proof of concept.
+
+---
+
 ### Summary
 
-Token pricing comparisons are not TCO comparisons. A complete AI application costs 2–3× the inference spend to operate — when you include the compute, storage, networking, database, and operational overhead that every production deployment needs.
+Token pricing comparisons are not TCO comparisons. How much more than the inference bill a complete AI application costs depends on how it's assembled: in the bottom-up model above, a consolidated single-provider RAG stack totals **1.24×** its inference spend, while the identical workload split across two providers reaches **2.9×**. The difference is entirely compute, storage, networking, database, egress, and operational overhead — none of which appears in a $/M token table.
 
-The Deploy 2026 TCO analysis for a 1M-bookings/month corporate travel agent:
+The [Deploy 2026](https://www.nasdaq.com/press-release/digitalocean-unveils-ai-native-cloud-built-inference-era-2026-04-28) TCO analysis for a 1M-bookings/month corporate travel agent:
 - DigitalOcean AI-Native Cloud: **$67,727/month**
 - Baseten + AWS: **$84,827/month** (25% more)
 - AWS AgentCore: **$110,337/month** (63% more)
 
-The full-stack advantage comes from three places: no cross-provider egress fees, consolidated operational overhead, and a single billing relationship. It matters most for teams building complete applications, EMEA customers with GDPR requirements, and mid-market companies where infrastructure complexity is a real burden.
+The full-stack advantage comes from three places: no cross-provider egress fees, consolidated operational overhead, and a single billing relationship. It matters most for teams building complete applications, teams with EU data-residency requirements, and mid-market teams where infrastructure complexity is a real burden.
 
 It matters less for teams with deep existing hyperscaler investments, pure API-wrapper products, or workloads requiring frontier model access on day zero.
 
@@ -196,7 +257,7 @@ The right framework: build the full infrastructure component list, price all of 
 
 ---
 
-*This is Article 4 in a 5-part series on LLM inference in production. [Article 1](article-1-llm-bill-3x.md) covers the hidden anatomy of LLM API costs. [Article 2](article-2-model-selection.md) covers model selection methodology. [Article 3](article-3-prompt-caching.md) goes deep on prompt caching. [Article 5](article-5-multi-provider-routing.md) covers multi-provider routing architecture.*
+*This is Article 4 in a 5-part series on LLM inference in production. [Article 1](/blog/llm-bill-3x) covers the hidden anatomy of LLM API costs. [Article 2](/blog/choosing-the-right-model) covers model selection methodology. [Article 3](/blog/prompt-caching) goes deep on prompt caching. [Article 5](/blog/multi-provider-routing) covers multi-provider routing architecture.*
 
 ---
 
@@ -206,18 +267,11 @@ The right framework: build the full infrastructure component list, price all of 
 - [Serverless Inference with the DigitalOcean AI Platform](https://www.digitalocean.com/community/tutorials/serverless-inference-gradient) — DigitalOcean
 - [Inference Pricing](https://docs.digitalocean.com/products/inference/details/pricing/) — DigitalOcean Documentation
 - [What's New on DigitalOcean's Inference Engine](https://www.digitalocean.com/blog/whats-new-on-gradient-ai-platform) — DigitalOcean
+- [Serverless vs Dedicated vs Batch Inference](https://www.digitalocean.com/community/tutorials/serverless-vs-dedicated-vs-batch-inference) — DigitalOcean
+- [Dedicated vs Serverless Inference as You Scale](https://www.digitalocean.com/community/conceptual-articles/dedicated-vs-serverless-inference-at-scale) — DigitalOcean
+- [DigitalOcean Bare Metal GPUs in the EU](https://www.digitalocean.com/blog/digitalocean-bare-metal-gpus-eu-data-center) — DigitalOcean
+- [Groq Pricing](https://groq.com/pricing) — Groq
+- [Fireworks AI Pricing](https://fireworks.ai/pricing) — Fireworks AI
+- [Together AI Pricing](https://www.together.ai/pricing) — Together AI
 - [Best Inference Providers for AI Agents in 2026](https://fast.io/resources/best-inference-providers-ai-agents/) — Fastio
 - [Vector Storage Costs: S3, OpenSearch, pgvector, Pinecone](https://darryl-ruggles.cloud/the-real-cost-of-vector-storage-s3-vectors-vs-opensearch-vs-pgvector-vs-pinecone/) — Darryl Ruggles
-
-{/* series-nav */}
-
----
-
-### Series — Inference in Production
-
-- [Series intro — Inference in Production: A Five-Part Field Guide](/blog/inference-in-production)
-- [Part 1 — Why Your LLM Bill Is 3× What You Expected](/blog/llm-bill-3x)
-- [Part 2 — Choosing the Right Model for Your Use Case](/blog/choosing-the-right-model)
-- [Part 3 — Prompt Caching in Practice — From 7% to 74% Hit Rate](/blog/prompt-caching)
-- **Part 4 — The Real TCO of a Full-Stack AI Application** (you are here)
-- [Part 5 — Multi-Provider Routing Is Not a Problem — It's Your Architecture](/blog/multi-provider-routing)
