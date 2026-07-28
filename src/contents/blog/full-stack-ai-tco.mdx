@@ -174,17 +174,15 @@ Not every team benefits equally from a full-stack approach. Understanding the co
 
 ---
 
-### The Biggest Consolidation Wins Never Reach the Spreadsheet
+### What the Operational Overhead Line Actually Buys
 
-The operational benefits of full-stack consolidation are real but hard to quantify in advance. A few patterns that consistently appear:
+The $3,040 is the line readers push back on hardest, so it's worth saying exactly what work it represents. It isn't a productivity abstraction. It's recurring tasks that land on someone's calendar every month, and they scale with the number of providers rather than with traffic.
 
-**Security surface reduction.** Fewer providers means fewer API keys to rotate, fewer IAM configurations to maintain, fewer audit logs to aggregate. Security is a multiplicative cost of provider count.
+**Key and access rotation scales with provider count.** Every additional provider is another set of credentials on a rotation schedule, another IAM model to keep consistent with the others, and another audit log to pull into the same place when a review comes around. None of this gets cheaper as volume grows, which is why it behaves like a fixed cost in the model.
 
-**Debugging efficiency.** When a production incident spans your inference endpoint, your vector database, and your application tier, root cause analysis across three providers' logs and support teams is meaningfully slower than tracing the same incident inside one platform's observability stack.
+**Cross-provider incident triage is where the hours actually go.** When a request fails somewhere between your inference endpoint, your vector database, and your application tier, and those three live in three accounts, the slow part isn't the fix — it's establishing which of them broke. Inside one platform that's a single trace. Across three it's three consoles, three log formats, three retention policies, and often three support queues with different response times.
 
-**Cost predictability.** Multi-provider architectures generate bills that are harder to forecast — different billing cycles, different pricing models, different usage metrics. A single bill with consistent pricing units reduces finance overhead and makes budget planning more reliable.
-
-**Vendor relationship simplicity.** One account team, one enterprise agreement negotiation, one support escalation path. At scale, this operational simplification has real dollar value.
+That is the work the model prices at 32 engineer-hours per month. Time your own version of these tasks for a month and substitute the real number — and remember the sensitivity test above: even at zero, the conclusion holds, just by a smaller margin.
 
 ---
 
