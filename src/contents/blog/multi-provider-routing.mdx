@@ -115,7 +115,8 @@ What this means in practice:
 
 - **No additional latency hop** — routing decisions happen inside the platform, not through an external proxy that adds a network round-trip
 - **Integrated billing** — no separate billing relationship with a gateway provider; routing is part of the same account
-- **Up to 67% lower inference costs** ([per DigitalOcean](https://www.digitalocean.com/blog/whats-new-on-gradient-ai-platform)) via intelligent cross-model routing — the router moves requests between model tiers (e.g., routing simple queries to a smaller, cheaper model and escalating complex queries to a larger one) automatically, without custom routing code. Workato's Research Lab, processing over 1 trillion automated workloads, reported 77% faster time-to-first-token, 79% lower end-to-end latency, and 67% lower inference cost
+- **Cross-model routing without custom code** — the router moves requests between model tiers automatically, sending simple queries to a smaller model and escalating complex ones. What that saves on a real workload is measured in the next section; DigitalOcean's own marketing figure is "up to 67%" ([per DigitalOcean](https://www.digitalocean.com/blog/whats-new-on-gradient-ai-platform), and a customer case study reports similar), but treat any vendor-published number — including that one — as directional until you've run your own traffic through it
+- **Reconfigurable without a deploy** — the routing policy lives in the platform, not in your application, so changing which model serves your traffic is an API call rather than a release
 - **Observability in one place** — routing decisions, latency, cost, and cache hit rates are visible in the same dashboard as the rest of your infrastructure
 
 The differentiation is not that DO routing is better than LiteLLM at routing — both route requests. The differentiation is operational: first-party routing eliminates a dependency, reduces integration surface, and keeps the routing logic within the platform where the inference actually runs.
@@ -155,6 +156,26 @@ Swap in `anthropic-claude-4.6-sonnet` and compare the `usage` block — the delt
 - **First-party (DO Inference Router)** — you run the dominant workload on DO and want routing with no extra latency hop, no separate bill, one dashboard. Best when DO is your primary provider.
 - **Third-party gateway (LiteLLM, OpenRouter)** — you span providers DO doesn't host, or you need a self-hosted proxy with full control over routing logic. Accept the extra hop and dependency.
 - **Single provider, no router** — low volume, one workload class, one model tier. Routing overhead isn't worth it until traffic actually mixes simple and complex tasks.
+
+---
+
+### Changing the model your traffic uses should not require a deploy
+
+The routing argument so far has been about cost. There's a second property that matters more the longer a system lives: **where the model decision is stored.**
+
+If the model name is a string in your application, then adopting a newer model is a code change, a review, a release, and a rollback plan — for every service that calls it. If the model decision lives in a routing policy, it's a configuration change, and the application never knows it happened.
+
+I built a demo to check that this actually works rather than assuming it. Two lanes serve the same request stream: one with a model hard-coded, one calling a router. Mid-stream, the router's model ranking is reordered through the API:
+
+```
+PUT /v2/gen-ai/models/routers/{id}
+```
+
+Every response after that is served by the newly ranked model. Observed propagation was roughly two seconds. **Zero client changes, zero deploys, and no failed requests during the cutover.**
+
+The part that makes this checkable rather than a claim: the `model` field in the response is written server-side, and every response carries the `x-model-router-selected-route` header showing which route the platform chose. You're not taking the client's word for which model answered — you can read it off the response and join it against your quality metrics.
+
+This is the practical answer to a question that comes up whenever a new model launches: *how do we adopt it without interrupting live traffic?* If the model is hard-coded, the answer involves a release train. If it's behind a router, the answer is a ranking change and a header you can verify afterwards.
 
 ---
 
@@ -232,23 +253,36 @@ A minimal resilient architecture:
 
 The routing taxonomy from earlier still applies: use the primary for standard traffic, secondary as failover, and route different workload types to their appropriate tiers. The architecture doesn't need to be complex — a well-configured LiteLLM or Inference Router setup with two provider endpoints covers most cases.
 
+**How little code this actually is.** In a demo I built to watch this happen, a three-step agent (retrieve → summarize → extract) serves the same request in two lanes while the primary endpoint returns 429s. The agent code is byte-for-byte identical between the lanes. The only difference is one tuple in configuration:
+
+```python
+ENDPOINTS = (PRIMARY,)         # single-endpoint lane: burns its retries, then fails
+ENDPOINTS = (PRIMARY, ALT)     # routed lane: fails over mid-run and finishes
+```
+
+The single-endpoint lane exhausts its retries and dies. The routed lane fails over and completes, and the user on that lane never learns a failover happened — it shows up only in the decision log. (The faults are injected by a local proxy so the run is deterministic; the exercise demonstrates failover behaviour and says nothing about any provider's real error rates. It also isn't a latency benchmark — the routed lane usually pays for one extra failed request before it switches.)
+
+Two failure modes the checklist above doesn't cover, and both bite in production:
+
+**Your secondary is a different model, so your evals have to pass on both.** "Same model or equivalent quality" is doing a lot of work in that list. If the secondary is a different model — and across providers it usually is — then failing over is a silent quality change. Run your eval set against the fallback path, not just the primary, or a provider incident becomes an undetected downgrade that only shows up in user complaints.
+
+**Failover has a bill, not just a duration.** If the secondary sits a tier up, a six-hour incident is a cost event as well as an availability one. And per the previous section, the fallback path is cold by definition: the first requests after a cutover pay full price on a prefix cache that hasn't been populated yet. Size that before you need it, so the incident review isn't the first time anyone does the arithmetic.
+
 The key principle: **design the fallback path deliberately instead of assuming your primary provider will never have a bad day.** A team that builds a resilient multi-provider architecture and keeps one provider as the primary endpoint for its dominant workload class ends up in a better position than a team that runs single-provider on principle and scrambles during the first incident.
 
 ---
 
-### Where DO Fits in a Multi-Provider World
+### When DigitalOcean Should Be Your Primary — and When It Shouldn't
 
-The strategic positioning is direct:
+The useful way to place any provider in a multi-provider architecture is to ask what it should be *primary* for, not whether it should be your only one. For DigitalOcean the honest answer is: a good default for the dominant workload and the routing control plane, and the wrong choice for several specific things.
 
-**DO wants to be your primary inference provider and your routing control plane — not your only provider.**
-
-The case for DO as primary:
+Where it earns primary:
 - Full-stack integration (inference + compute + vector DB + storage) at 20–40% lower TCO than multi-cloud alternatives, per DigitalOcean's own [Deploy 2026 analysis](https://www.nasdaq.com/press-release/digitalocean-unveils-ai-native-cloud-built-inference-era-2026-04-28) — vendor-published, so treat it as directional and model your own stack before relying on it
 - First-party routing layer that handles model right-sizing without third-party dependencies
 - EU data residency via dedicated inference on Amsterdam GPU infrastructure (serverless-in-EU is not yet available from any provider, DO included)
 - Single VPC, single billing relationship, integrated observability
 
-The honest acknowledgment of where DO isn't the full answer:
+Where it shouldn't be primary:
 - If you need the absolute latest frontier model on launch day, you're sourcing direct from Anthropic/OpenAI/Google
 - If you need Together AI's depth of open-source model catalog, you won't find the same breadth on DO
 - Fine-tuning and LoRA workflows need a different provider (Together, Fireworks, Replicate)
@@ -273,6 +307,9 @@ That's the real failure mode, and it's why observability matters more than the s
 
 **Can I run serverless inference in the EU?**
 Not today, and not with any provider. Together AI, Fireworks AI, Groq, and DigitalOcean all serve serverless inference from US data centers. If your data can't leave the EU/EEA, your option is dedicated inference on EU GPU infrastructure — which DigitalOcean has in Amsterdam and several others also offer — not a serverless endpoint. Anyone telling you otherwise is describing a roadmap.
+
+**A better model just launched. Can I adopt it without a deploy?**
+If the model name is a string in your application, no — it's a code change everywhere that string appears. If your traffic goes through a router, yes: you reorder the routing policy through the API and subsequent requests are served by the new model, with no client change and no release. In the demo above the propagation was about two seconds with no failed requests during the cutover. Verify it afterwards with the `x-model-router-selected-route` header rather than assuming, and run your eval set against the new model first — a frictionless cutover is only an advantage if the thing you cut over to is actually better on your workload.
 
 **Can I put those 99.1–99.8% numbers straight into my own SLA?**
 No. Those come from one third-party monitor's 30-day window and are directional at best — your measured availability depends on region, model, and traffic shape. If you're writing an availability commitment to your own customers, derive it from each provider's published status page and contractual SLA, plus your own instrumentation, and size your failover path to cover the gap between what you promise and what any single provider guarantees.
