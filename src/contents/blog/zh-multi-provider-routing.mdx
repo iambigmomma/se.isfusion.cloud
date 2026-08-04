@@ -1,139 +1,130 @@
 ---
-title: '多供應商路由不是問題——它就是你的架構'
-description: '成熟的團隊預設就會為多供應商路由進行架構設計。與其抗拒這個現實，致勝策略是把誠實的效能數據與路由智慧結合起來。本文說明 2026 年生產環境的推論路由實際上是如何運作的——以及 DigitalOcean 的定位在哪裡。'
+title: '多供應商 LLM 路由不是問題，而是你的架構'
+description: '生產環境團隊如何在模型層級與供應商之間路由 LLM 流量：實測到的 36× 成本差距、LiteLLM 與 OpenRouter 與第一方路由的取捨，以及故障轉移。'
 banner: 'multi-provider-routing-banner'
-publishedAt: '2026-07-26'
+publishedAt: '2026-08-03'
 tags: 'ai-ml,gen-ai,llm,infrastructure,architecture'
 ---
 > *利益揭露：我是 DigitalOcean 的 Solutions Architect，所以文中提到 DigitalOcean 產品時，是「業內人的觀點」而非中立第三方——這些地方我都會明確標示，其餘分析則盡量保持廠商中立。以下皆為個人觀點。*
 
-*為什麼認真的團隊預設就採用多供應商推論——以及 DigitalOcean 的第一方 Inference Router 落在哪裡，附上 `inference.do-ai.run` 上有紀錄的實測成本數字。路由模式與供應商無關；DO 專屬數字來自公開的 API 實測，而非行銷說法。*
+*本文的英文版本已發表於 [DigitalOcean Community](https://www.digitalocean.com/community/tutorials/multi-provider-llm-routing)。*
+
+*為什麼認真的團隊預設就採用多供應商推論，以及 DigitalOcean 的第一方 Inference Router 落在哪個位置，並附上 `inference.do-ai.run` 上有紀錄的實測成本數字。這些路由模式與供應商無關；DigitalOcean 專屬的數字來自公開的 API 實測，而不是行銷說法。*
 
 ### 前言
 
 每一家推論供應商的銷售劇本裡，都有一個段落在說明你為什麼應該把業務整合到他們身上。常見的賣點包括：擔心被競爭對手綁定（lock-in）、管理多組 API 金鑰所帶來的營運複雜度，以及單一帳務關係的便利性。
 
-劇本沒說的是：最成熟的買家——那些大規模運行 AI 的團隊，那些真正懂行的人——幾乎清一色都是「刻意」採用多供應商設計。他們把批次工作導向最便宜的端點、把即時查詢導向最快的端點、把小眾模型導向擁有它的供應商，並把對合規敏感的工作負載導向具備認證的供應商。他們是刻意這麼做的，不是偶然。
+劇本裡沒說的是：最成熟的買家，也就是那些真正大規模跑 AI、真正知道自己在做什麼的團隊，幾乎清一色都是刻意設計成多供應商架構。他們把批次工作送到最便宜的端點、把即時查詢送到最快的端點、把冷門模型送到有在提供的那一家，並把對法遵敏感的工作負載送到有認證的供應商。這是刻意為之，不是意外。
 
-面對這個現實，正確的回應不是去抗拒它，而是要在其中成為有用的一環。
+面對這個現實，正確的回應不是抵抗它，而是在其中變得有用。
 
-本文涵蓋多供應商路由在 2026 年如何運作、團隊用來實作它的工具，以及推論供應商的第一方路由（first-party routing）在什麼地方改變了整個盤算。
+本文說明多供應商路由今天在生產環境中實際上是怎麼運作的、團隊用哪些工具來實作它，以及推論供應商的第一方路由會如何改變這個算式。文中討論的 DigitalOcean 產品包括 [Serverless Inference](https://docs.digitalocean.com/products/inference/how-to/use-serverless-inference/)（按 token 計費、位於 `inference.do-ai.run` 的 OpenAI 相容端點）、[Inference Router](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/)（第一方、以政策為基礎的模型路由），以及 [Dedicated Inference](https://docs.digitalocean.com/products/inference/how-to/use-dedicated-inference/)（按 GPU 小時計費的部署）。
 
-### 重點摘要
+### TL;DR
 
-* 對認真的團隊來說，多供應商路由是*預設*的架構——是要去設計的對象，而不是要去對抗的問題。
-* 驅動因素是結構性的：沒有任何供應商擁有所有模型；API 正常運作時間（uptime，約 99.1–99.8%）低於傳統基礎設施的水準，因此故障轉移（failover）是必備的；同一個模型在各家 serverless 供應商之間價格約相差 2×（而跨模型層級則高達 60× 以上）。
-* 依約束條件路由：批次 → 最便宜、即時聊天 → 最低 TTFT、小眾 → 最廣的目錄、合規 → 具認證的地區，再加上一條後備路徑。
-* 為 **goodput（有效吞吐，按 SLO 完成且正確的請求）** 進行最佳化——而不是為原始的 tokens/秒或最便宜的 token。
-* 與 OpenAI 相容的 API 讓切換供應商只是改一個 base-URL，所以綁定效應很弱；第一方路由（DO Inference Router，「最高可達 67%」）的差異化在於營運層面，而不是把你困住。
-* 對歐盟要誠實：今天所有供應商的無伺服器（serverless）推論都僅限美國，因此歐盟資料落地（data residency）目前意味著在歐盟 GPU 基礎設施上使用專用（dedicated）推論。
+- 對認真的團隊來說，多供應商路由是*預設*架構：是要拿來設計的東西，而不是要對抗的問題。
+- 驅動因素是結構性的：沒有任何一家供應商擁有全部模型；API 可用度（約 99.1–99.8%）低於傳統基礎設施的常態，所以故障轉移是必要的；同一個模型在各無伺服器供應商之間的價差約 2×（跨模型層級則有 60× 以上）。
+- 依約束條件路由：批次 → 最便宜、即時對話 → 最低 TTFT、冷門模型 → 型錄最廣、法遵 → 有認證的區域，再加上一條後備路徑。
+- 最佳化的目標是 **goodput**（在 SLO 內完成且答案正確的請求），而不是原始的 tokens/sec 或最便宜的 token。
+- OpenAI 相容 API 讓切換供應商只是改一個 base URL，所以綁定效果很弱；第一方路由（DigitalOcean Inference Router：客戶回報[推論成本最多降低 67%](https://investors.digitalocean.com/news/news-details/2026/DigitalOcean-Launches-Inference-Engine-with-New-Capabilities-for-Production-AI-Including-Inference-Router-for-Efficient-Scaling-of-Agentic-Workloads/default.aspx)）的差異化來自營運面，而不是靠把你困住。
 
----
+### 多供應商路由的現實：它就是預設值
 
-### 2026 年的現實：多供應商是預設值
+在跑正經生產工作負載的團隊裡，「全押在單一推論供應商」的做法愈來愈少見。驅動因素是結構性的：
 
-在運行嚴肅生產環境工作負載的團隊之間，「全押在單一推論供應商上」愈來愈罕見。驅動因素是結構性的：
+#### 1. 沒有任何一家供應商擁有完整型錄
 
-**1. 沒有單一供應商擁有完整目錄**
+模型版圖已經碎片化。前沿的封閉模型（Claude、GPT-5、Gemini）必須直接找各自的供應商。開放權重模型跑在 Together、Fireworks、Groq、Replicate 或你自己的基礎設施上。專門化模型（醫療編碼、法律推理、程式碼專用）往往落在精品型供應商手上。沒有任何一家供應商能以最好的效能與價格同時提供這些。
 
-模型版圖已經碎片化。前沿封閉模型（Claude、GPT-5、Gemini）必須直接向各自的供應商取得。開放權重模型則跑在 Together、Fireworks、Groq、Replicate，或你自己的基礎設施上。特化模型——醫療編碼、法律推理、程式碼專用——往往落在精品型的供應商手上。沒有任何單一供應商能以最佳效能與價格同時提供以上全部。
+#### 2. 可用度的落差讓故障轉移站得住腳
 
-**2. 可用性缺口讓故障轉移有其正當性**
+傳統雲端基礎設施的 SLA 是 99.9% 以上。LLM API 的可用度達不到這個水準。某個第三方監測服務（[TokenMix 的 30 天滾動資料](https://tokenmix.ai/blog/best-llm-api-providers)）回報主要供應商落在約 99.1–99.8% 的區間，表現最差的約 97.2%（每月大約 20 小時的停機）。任何單一這類數字都應該當成方向性參考，而不是權威。多數供應商都有自己的狀態頁，而你*實測*到的可用度取決於你的區域、模型與流量形態。但有一個結構性重點在所有來源之間都成立：生產環境的 LLM API 低於你對成熟雲端基礎設施預期的 99.9% 以上。對於 AI 層位在關鍵路徑上的應用來說，這使得故障轉移策略成為必要；請對照每一家候選供應商的狀態頁去驗證真實數字，而不是相信任何聚合網站的表格。
 
-傳統雲端基礎設施的 SLA 跑在 99.9% 以上。LLM API 的可用性達不到這個水準。某個第三方監測機構（[TokenMix 的 30 天滾動數據](https://tokenmix.ai/blog/best-llm-api-providers)）回報主要供應商落在約 99.1–99.8% 的區間，表現最差者約為 97.2%（大約每月 20 小時的停機時間）。請把任何單一這類數字當作方向性參考，而非權威結論——供應商會發佈自己的狀態頁，而你*實際量測到*的可用性取決於你的地區、模型與流量型態。但結構性的論點在每個來源都成立：生產環境的 LLM API 都低於你對成熟雲端基礎設施所期待的 99.9% 以上。對於 AI 層處於關鍵路徑上的應用而言，這就要求一套故障轉移策略——請對照每個候選供應商的狀態頁去驗證其真實數字，而不是依賴任何彙整平台的表格。
+這不是在批評任何特定供應商，LLM 推論本來就比靜態檔案伺服器更難做到可靠。這是這項技術在目前成熟度下的結構性特性。把區間換算成小時：99.8% 在 30 天的月份裡大約是 1.5 小時的停機、99.1% 大約是 6.5 小時、97.2% 大約是 20 小時。如果你的應用無法在一個月內吸收單一供應商好幾個小時的不可用，那你需要不只一家。
 
-這不是針對任何特定供應商的批評——LLM 推論要做到可靠，本來就比一台靜態檔案伺服器難得多。這是這項技術在目前成熟度下的結構性特性。把這個區間換算成小時來看：在 30 天的月份裡，99.8% 大約是 1.5 小時的停機、99.1% 大約是 6.5 小時，而 97.2% 大約是 20 小時。如果你的應用無法在一個月內吸收單一供應商數小時的不可用，你就需要不止一家。
+#### 3. 價差讓路由在經濟上站得住腳
 
-**3. 價差讓路由在經濟上合理**
+同一個開放模型在各無伺服器供應商之間，價格大約有 2× 的差距。Llama 3.3 70B 的輸入 token（2026 年 7 月確認）在 [Groq](https://groq.com/pricing) 是 $0.59/M（輸出：$0.79/M）、[DigitalOcean](https://docs.digitalocean.com/products/inference/details/pricing/) 是 $0.65（輸出：$0.65/M）、[Fireworks](https://fireworks.ai/pricing) 是 $0.90、[Together](https://www.together.ai/pricing) 是 $1.04，而批次方案（通常約 5 折）會把低端再往下拉。這份比較本身就說明了地面移動得多快：Groq 已排定在 2026 年 8 月 16 日淘汰 Llama 3.3 70B，所以請針對真正錨定你自己路由表的那個模型重跑一次比較。單就個別供應商來看差距不大，但在高流量批次工作負載上，即使只有 2×，維持單一供應商也等於白白留下真金白銀。（更大的槓桿在跨模型*層級*；見下文。）
 
-同一個開源模型在各家 serverless 供應商之間，價格大約相差 2×。以 Llama 3.3 70B 為例（2026 年 6 月）：[Groq](https://groq.com/pricing) 每百萬 token $0.59、[DigitalOcean](https://docs.digitalocean.com/products/inference/details/pricing/) $0.65、[Fireworks](https://fireworks.ai/pricing) $0.90、[Together](https://www.together.ai/pricing) $1.04——而批次層級（通常約打 5 折）會把低端再往下拉。單一供應商來看差距不大，但在大量批次工作負載上，即使 2× 也是把真金白銀留在桌上。（更大的槓桿在跨模型*層級*——見下文。）
+而這還只是*同一個*模型跨供應商的情形。跨模型*層級*的價差要大得多，那是路由經濟學的另一半。以下是單一供應商上的即時價格階梯（[DigitalOcean serverless](https://docs.digitalocean.com/products/inference/details/pricing/)，每 100 萬 token，已於 2026 年 7 月對照官方定價頁重新驗證）：
 
-而那還只是*同一個*模型在各供應商之間的差距。跨模型*層級*的價差遠大得多——這正是路由經濟學的另一半。以下是單一供應商上的即時價格階梯（[DigitalOcean 無伺服器](https://docs.digitalocean.com/products/inference/details/pricing/)，每百萬 token，2026 年 6 月擷取）：
+| Model             | Input  | Output |
+| ----------------- | ------ | ------ |
+| Qwen3-32B         | $0.25  | $0.55  |
+| DeepSeek V3.2     | $0.425 | $1.36  |
+| Llama 3.3 70B     | $0.65  | $0.65  |
+| Claude Haiku 4.5  | $1.00  | $5.00  |
+| Claude Sonnet 4.6 | $3.00  | $15.00 |
+| Claude Opus 4.8   | $5.00  | $25.00 |
+| o1                | $15.00 | $60.00 |
 
-| 模型 | 輸入 | 輸出 |
-|-------|------:|-------:|
-| Qwen3-32B | $0.25 | $0.55 |
-| DeepSeek V3.2 | $0.50 | $1.60 |
-| Llama 3.3 70B | $0.65 | $0.65 |
-| Claude Haiku 4.5 | $1.00 | $5.00 |
-| Claude Sonnet 4.6 | $3.00 | $15.00 |
-| Claude Opus 4.8 | $5.00 | $25.00 |
-| o1 | $15.00 | $60.00 |
+*價格為 2026 年 7 月的資料，而且變動很快：供應商會調價、增加方案級距，也會在很短的預告期內退役模型。在你拿這些數字編預算之前，請重新確認路由表裡每一個模型的官方定價頁。*
 
-*以上價格為 2026 年 6 月的資料，而且變動很快——供應商會調價、新增層級、下架模型，通知期都很短。在用這些數字編預算之前，請把你路由表裡的每一個模型都對照官方定價頁重新確認一次。*
+![Price ladder of DigitalOcean serverless model tiers from Qwen3-32B to o1, a 60× input spread](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Multi-provider%20routing%20Jeff/price_ladder.png)
 
-![Price ladder of DigitalOcean serverless model tiers from Qwen3-32B to o1, a 60× input spread](https://res.cloudinary.com/iambigmomma/image/upload/v1784186478/blog/multi-provider-routing/price_ladder.png)
+*同一家供應商、七個層級：每百萬輸入 token 從 $0.25 到 $15.00。最要緊的路由決策是請求落在這道階梯的哪一階，而不是帳單上印著哪一家廠商的商標。*
 
-*同一家供應商、七個層級：每百萬輸入 token 從 $0.25 到 $15.00。真正關鍵的路由決策，是一個請求落在這個階梯的哪一階——而不是帳單上印的是哪家廠商的商標。*
+在同一家供應商上，最便宜與最貴的層級之間就有 **60× 的輸入價差、超過 100× 的輸出價差**，這還沒開始跨供應商比較。路由的整套論證都建立在這個落差上：一個 $0.25 模型就能正確處理的任務，如果你反射性地丟給最高層級，成本會變成 60 倍。所謂路由，不過就是「不要那樣做」的紀律。
 
-在最便宜與最昂貴的層級之間，這是**輸入 60× 的價差、輸出超過 100× 的價差**——還只是在一家供應商上，你甚至都還沒開始跨供應商比較。整個路由的理由就建立在這個落差上：一個 0.25 美元模型就能正確處理的任務，如果你反射性地把它送到最頂層，成本就會貴上 60×。路由不過就是「不去這麼做」的紀律。
+### 依約束條件路由：批次送最便宜、對話送最低 TTFT
 
----
+不是所有推論流量的需求都一樣。合理的路由架構會依實際的約束條件把流量分類，再據此路由：
 
-### 依約束路由：批次給最便宜、聊天給最低 TTFT
+| Workload Type                            | Primary Constraint | Route To                                      |
+| ---------------------------------------- | ------------------ | --------------------------------------------- |
+| Batch / offline processing               | Cost               | Cheapest provider, batch discount tier        |
+| Real-time user chat                      | Latency (TTFT)     | Lowest TTFT provider for that model           |
+| Niche / specialized models               | Model availability | Provider with that specific model             |
+| Compliance-sensitive (healthcare, legal) | Certification      | SOC2 / HIPAA certified provider               |
+| High-volume steady-state                 | Throughput         | Provider with highest tokens/sec for workload |
+| Fallback / overflow                      | Availability       | Secondary provider on primary failure         |
 
-並非所有推論流量都有相同的需求。一套理性的路由架構會依流量的實際約束條件加以分類，並據此進行路由：
+可以把這想成一套貨運物流作業。有經驗的托運人不會所有東西都用同一家業者：急件走隔夜空運、大宗貨走陸運、最後一哩交給區域型業者，還會為跨境需求留著國際選項待命。智慧在於把貨物的需求對應到業者的強項，而不是因為比較簡單就只用一家。
 
-| 工作負載類型 | 主要約束 | 路由到 |
-|--------------|-------------------|----------|
-| 批次／離線處理 | 成本 | 最便宜的供應商、批次折扣層級 |
-| 即時使用者聊天 | 延遲（TTFT） | 該模型 TTFT 最低的供應商 |
-| 小眾／特化模型 | 模型可用性 | 擁有該特定模型的供應商 |
-| 對合規敏感（醫療、法律） | 認證 | 通過 SOC2／HIPAA 認證的供應商 |
-| 大量穩態 | 吞吐量 | 該工作負載 tokens/秒最高的供應商 |
-| 後備／溢位 | 可用性 | 主要供應商失效時的次要供應商 |
+![Field-guide schematic of a routing dispatcher sending workloads along Batch, Real-time, Niche, and Compliance routes](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Multi-provider%20routing%20Jeff/logistics_dispatcher.png)
 
-把這想成一個貨運物流作業。一個經驗老到的貨主不會所有東西都用同一家貨運業者——他們用隔夜空運處理急件包裹、用陸路貨運處理大宗貨物、用區域型貨運業者處理最後一哩配送，並讓跨境的國際選項待命以因應跨國需求。智慧之處在於把貨物的需求對應到貨運業者的強項，而不是因為「比較簡單」就只用一家貨運業者。
+*路由器就是一個調度員：它讀取每一筆請求上的約束條件（成本、延遲、模型可用性、認證），然後挑出能滿足它的車道。這些車道就是上面那張路由表。*
 
-![Field-guide schematic of a routing dispatcher sending workloads along Batch, Real-time, Niche, and Compliance routes](https://res.cloudinary.com/iambigmomma/image/upload/v1784186478/blog/multi-provider-routing/logistics_dispatcher.png)
+那些把所有推論流量一視同仁、全部用單一供應商的單一層級送出去的團隊，等同於連不急的貨都在付隔夜空運的費率。
 
-*路由器就是一個調度員：它讀取每個請求上的約束條件——成本、延遲、模型可用性、認證——然後挑一條能滿足它的路線。這些路線就是上面那張路由表。*
+#### LiteLLM 與 OpenRouter 早就在做這件事：第一方路由多給了什麼
 
-那些把所有推論流量一視同仁的團隊——把每件事都透過單一供應商、單一層級導送——就等於是替所有東西都付隔夜空運的費率，連那些根本不急的貨物也一樣。
+在討論第一方路由之前，值得誠實面對生態系已經提供了什麼。你大概已經知道這些工具，甚至已經有一個跑在生產環境裡。
 
----
+**LiteLLM** 是一套開源 Python 函式庫兼可自架的 proxy，透過 OpenAI 相容介面把 100 多家 LLM 供應商暴露出來。它處理供應商抽象、後備邏輯、成本追蹤與速率限制。代價是：它要自架（營運負擔），而且會增加延遲開銷。自架同時也代表相依鏈由你自己承擔：這種規模的 proxy 會帶進龐大的傳遞相依樹，所以請鎖定版本，並像對待關鍵路徑上任何其他服務一樣追蹤安全公告。對於已有 Python 基礎設施、也有餘力自架的團隊來說，它是一個經過驗證、社群很大的選項。
 
-### LiteLLM 與 OpenRouter 早就在做這件事——第一方路由多了什麼
+**OpenRouter** 是一項託管的路由服務，在單一 API 與統一帳單背後提供來自數十家供應商的 300 多個模型。它接受一個依優先序排列的模型陣列，當主要模型失敗、被限流或拒絕時會自動嘗試下一個。它無法自架，但完全免除了營運負擔。代價是：你在關鍵路徑上又多加了一個受託管的相依，而且對路由決策的可見度比自架方案低。
 
-在討論第一方路由之前，值得誠實面對生態系統已經提供了什麼。你大概早就知道這些工具，說不定手上已經有一個跑在生產環境裡。
+**Portkey、Bifrost 等等**則佔據類似的位置：託管型閘道，在可觀測性、成本追蹤與企業功能上各有側重。
 
-**LiteLLM** 是一套開源的 Python 程式庫，也是可自行託管的代理伺服器（proxy），透過與 OpenAI 相容的介面對外提供 100 多家 LLM 供應商。它處理供應商抽象化、後備邏輯、成本追蹤與速率限制。取捨在於：它是自行託管（營運負擔），並會增加延遲開銷。自行託管也代表相依鏈由你自己負責——這種規模的代理伺服器會拉進一大串傳遞相依套件，所以請鎖定版本，並像對待關鍵路徑上其他服務一樣追蹤安全公告。但對於擁有 Python 基礎設施、又有能力自行託管的團隊來說，它是一個經過驗證、社群龐大的選項。
-
-**OpenRouter** 是一項代管的路由服務，在單一 API 與統一帳務背後集合了來自數十家供應商的 300 多個模型。它接受一個依優先順序排列的模型陣列，並在主要模型失效、被速率限制或拒絕時自動嘗試下一個。它無法自行託管，但完全卸下了營運負擔。取捨在於：你在關鍵路徑上又多加了一個代管的相依套件，而且你對路由決策的可見度比自行託管的方案要低。
-
-**Portkey、Bifrost 與其他工具**佔據著類似的位置——都是代管的閘道（gateway），在可觀測性、成本追蹤與企業功能上各有偏重。
-
-重點在於：**這些工具確實存在、確實能用，而且只要你評估過路由，大概都已經看過它們。**如果 OpenRouter 已經接進你的技術堆疊，那麼「你不需要它，直接用單一供應商就好」不是論點——那是在要你把能跑的程式碼拆掉。更值得問的是一個更小的問題：第一方路由能給你什麼是第三方閘道給不了的？
-
----
+重點在於：**這些工具存在、它們能用，而且如果你評估過路由，你八成已經看過它們了。** 如果 OpenRouter 已經接進你的技術堆疊，「你不需要它，用一家供應商就好」不是一個論證，而是在要求你把能動的程式碼拆掉。真正有用的問題比較窄：第一方路由給了你什麼是第三方閘道給不了的？
 
 ### 第一方路由：DigitalOcean Inference Router
 
-DigitalOcean 的 [Inference Router](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/) 是一個內建於推論平台本身的第一方路由層——不是一個連接到多家供應商的第三方閘道，而是一項原生能力。在代管的推論平台之中，這種第一方路由仍不常見；如今大多數的多供應商路由都是透過疊加在上層的第三方閘道來完成。
+DigitalOcean 的 [Inference Router](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/) 是一個內建在推論平台本身的第一方路由層，不是一個連接多家供應商的第三方閘道，而是原生能力。在託管型推論平台之中，這種第一方路由仍不常見；今天多數的多供應商路由都是透過疊在上層的第三方閘道進行的。
 
-這在實務上意味著：
+實際上這代表：
 
-- **沒有額外的延遲跳轉**——路由決策發生在平台內部，而不是透過一個會多增加一次網路往返的外部代理
-- **整合帳務**——不需要與閘道供應商建立另一套帳務關係；路由是同一個帳戶的一部分
-- **跨模型路由，不需自訂程式碼**——路由器會自動在模型層級之間移動請求，把簡單查詢送到較小的模型、把複雜的升級到較大的。它在真實工作負載上省下多少，下一節有實測；DigitalOcean 自己的行銷數字是「最高可達 67%」（[根據 DigitalOcean](https://www.digitalocean.com/blog/whats-new-on-gradient-ai-platform)，另有客戶案例回報相近幅度），但請把任何廠商公布的數字——包括這個——當作方向性參考，直到你用自己的流量跑過為止
-- **不必重新部署就能重新設定**——路由策略存在平台裡，而不是你的應用程式裡，所以要換哪個模型服務你的流量，是一次 API 呼叫，而不是一次發版
-- **可觀測性集中在一處**——路由決策、延遲、成本與快取命中率，都和你其餘的基礎設施顯示在同一個儀表板上
+- **沒有對外的網路跳點**：路由決策發生在平台內部，而不是透過一個會增加網路來回的外部 proxy。不過路由決策本身並非免費：DigitalOcean 的[官方文件](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/)把 router 開銷標為每筆請求約 200ms，相較於外部閘道的 proxy 跳點加上它自己的決策時間仍然比較有利，但在 TTFT 預算很緊的情況下值得把它算進去
+- **整合帳務**：不需要與閘道供應商建立另一段帳務關係；路由屬於同一個帳戶
+- **不用寫程式碼的跨模型路由**：router 會自動在模型層級之間搬動請求，把簡單查詢送到較小的模型，並把複雜的往上升級。這在真實工作負載上省下多少，下一節會實測；DigitalOcean 的發表公告引用了一位客戶（[LawVo](https://investors.digitalocean.com/news/news-details/2026/DigitalOcean-Launches-Inference-Engine-with-New-Capabilities-for-Production-AI-Including-Inference-Router-for-Efficient-Scaling-of-Agentic-Workloads/default.aspx)）回報，透過 router 的模型選擇讓推論成本降低超過 40%；在你把自己的流量跑過一遍之前，任何廠商公布的數字（包括這一個）都請當成方向性參考。（DigitalOcean 公布的那個較大的「67%」數字屬於[另一個機制](https://www.digitalocean.com/blog/workato-nvidia-technical-deep-dive-agentic-inference-cloud)：在專用 GPU 基礎設施上的 KV-aware routing，而不是跨模型的合適層級選擇）
+- **不用部署就能重新設定**：路由政策存在平台裡，而不是在你的應用程式裡，所以要改由哪個模型服務你的流量，是一次 API 呼叫，而不是一次發版
+- **可觀測性集中在一處**：路由決策、延遲、成本與快取命中率，都和你其餘基礎設施顯示在同一個儀表板上
 
-差異化並不在於 DO 路由比 LiteLLM 更會路由——兩者都會路由請求。差異化在於營運層面：第一方路由消除了一個相依套件、縮小了整合面，並讓路由邏輯保留在推論實際運行的平台之內。
+差異化不在於 DO 的路由在「路由」這件事上比 LiteLLM 更好；兩者都會把請求路由出去。差異化在營運面：第一方路由少掉一個相依、縮小整合面積，並把路由邏輯留在推論實際執行的那個平台裡。
 
----
+### router 到底省下多少，實測
 
-### 路由到底省下多少，實測
+路由的論證建立在一項量測上：**模型選型稅**。下面的比較用各模型公布的費率，對同一筆分類請求計價，並以有紀錄的 2026 年 6 月實測所量到的 token 形狀（在 `openai-gpt-oss-20b` 上為 94 in / 80 out，來自 `inference.do-ai.run`）作為固定基準。請注意，真實的跨模型用量絕不可能逐位元組相同（每個模型對同一組訊息的 tokenize 方式不同，花掉的 completion token 數也不同），所以這是在固定形狀下對*費率*的比較；你實測到的每筆請求價差，還會取決於各個模型在你的工作負載上有多囉嗦：
 
-路由的理由，建立在一個量測上：**模型選型稅**。在 `inference.do-ai.run` 上有紀錄的 2026 年 6 月實測——同一個分類提示、相同的 token 形狀（94 輸入 / 80 輸出），只換模型：
+| Model                         | Cost / request | vs cheapest |
+| ----------------------------- | -------------- | ----------- |
+| `openai-gpt-oss-20b`          | $0.0000407     | baseline    |
+| `openai-gpt-5`                | $0.0009175     | 22.5×       |
+| `anthropic-claude-4.6-sonnet` | $0.0014820     | 36×         |
 
-| 模型 | 每次成本 | 對比最便宜 |
-|-------|---------------:|------------:|
-| `openai-gpt-oss-20b` | $0.0000407 | 基準 |
-| `openai-gpt-5` | $0.0009175 | 22.5× |
-| `anthropic-claude-4.6-sonnet` | $0.0014820 | 36× |
-
-這是**光在費率上就 36 倍的價差**。每月 70 萬次分類呼叫下，把每一次都送給 Sonnet（而其實小模型就能過關）要花 **$1,037.40，而不是 $28.49**。在一份有紀錄的[成本治理實測](https://www.digitalocean.com/community/tutorials/inference-router-multi-model-api-cost-governance)中（70 萬 / 25 萬 / 5 萬 的分類 / 問答 / 推論組合），router 分派把每月成本**相較 Sonnet-only 降低 39.6%、相較 Opus-only 降低 63.7%**。用你自己的金鑰重現每次請求的差距：
+光是費率就有 **36× 的價差**。當一個小模型已經跨過準確度門檻，你卻把每一筆分類呼叫都送給 Sonnet，在 70 萬筆請求下的成本是**每月 $1,037.40，對比 $28.49**。在一份有紀錄的[成本治理實測](https://www.digitalocean.com/community/tutorials/inference-router-multi-model-api-cost-governance)中，以 70 萬／25 萬／5 萬的分類／問答／推理混合流量為例，router 分派把每月成本相對於 Sonnet-only 基準降低了 **39.6%，相對於 Opus-only 降低了 63.7%**。用你自己的金鑰重現每筆請求的差額：
 
 ```bash
 curl -s -X POST "https://inference.do-ai.run/v1/chat/completions" \
@@ -149,211 +140,187 @@ curl -s -X POST "https://inference.do-ai.run/v1/chat/completions" \
   }' | python3 -c "import sys,json; print(json.load(sys.stdin)['usage'])"
 ```
 
-換成 `anthropic-claude-4.6-sonnet` 再比對 `usage` 區塊——那個差距就是你的帳單今天正在扛的路由稅。完整設定與 `x-model-router-selected-route` 回應標頭見 [Inference Router how-to](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/)。
+換成 `anthropic-claude-4.6-sonnet` 再比較 `usage` 區塊；那個差額就是你的帳單今天背著的路由稅。完整設定與 `x-model-router-selected-route` 回應標頭都在 [Inference Router how-to](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/) 裡。
 
-**什麼時候用哪一種路由層：**
+**什麼時候該用哪一層路由：**
 
-- **第一方（DO Inference Router）**——你的主力工作負載跑在 DO 上，想要沒有額外延遲跳轉、沒有另一張帳單、只有一個儀表板的路由。DO 是你主要供應商時最合適。
-- **第三方閘道（LiteLLM、OpenRouter）**——你橫跨 DO 沒託管的供應商，或需要一個能完全掌控路由邏輯的自管代理。接受多一個跳轉與相依。
-- **單一供應商、不用路由器**——低流量、單一工作負載類別、單一模型層級。在流量真正混合簡單與複雜任務之前，路由的額外開銷不值得。
+- **第一方（DigitalOcean Inference Router）**：你的主力工作負載跑在 DigitalOcean 上，而且希望路由沒有外部閘道跳點、沒有另一張帳單、只有一個儀表板。當 DigitalOcean 是你的主要供應商時最合適。
+- **第三方閘道（LiteLLM、OpenRouter）**：你橫跨了 DO 沒有代管的供應商，或你需要一個能完全掌控路由邏輯的自架 proxy。那就接受多出來的跳點與相依。
+- **單一供應商、不用 router**：流量低、只有一類工作負載、只有一個模型層級。在流量真正混雜簡單與複雜任務之前，路由的額外負擔並不划算。
 
----
+### 換掉流量所用的模型，不應該需要重新部署
 
-### 換掉流量所用的模型，不該需要重新部署
+到目前為止，路由的論證都圍繞成本。還有第二個性質，系統活得愈久它就愈重要：**模型決策存放在哪裡。**
 
-到目前為止，路由的論證都圍繞著成本。但還有另一個性質，隨著系統活得越久越重要：**模型這個決定被存放在哪裡。**
+如果模型名稱是你應用程式裡的一個字串，那麼採用一個較新的模型就是一次程式碼變更、一次審查、一次發版，還有一份回滾計畫，而且每一個呼叫它的服務都要來一遍。如果模型決策存在路由政策裡，那就是一次組態變更，應用程式根本不會知道發生過這件事。
 
-如果模型名稱是你應用程式裡的一個字串，那麼採用一個更新的模型就是一次程式碼修改、一次審查、一次發版，外加一套回滾計畫——而且每一個呼叫它的服務都要來一遍。如果模型決定存放在路由策略裡，那它就只是一次設定變更，應用程式甚至不會知道發生過這件事。
+我做了一個 demo 來驗證這件事真的成立，而不是假設它成立。兩條車道服務同一串請求：一條把模型寫死，一條呼叫 router。過程中途，透過 API 把 router 的模型排序重新排列：
 
-我做了一個 demo 來驗證這件事真的成立，而不是假設它成立。兩條 lane 服務同一串請求：一條把模型寫死，一條呼叫 router。在請求串進行到一半時，透過 API 重新排序 router 的模型排名：
-
-```
+```bash
 PUT /v2/gen-ai/models/routers/{id}
 ```
 
-在那之後的每一個回應，都由新排名的模型服務。觀察到的傳播時間大約兩秒。**零客戶端修改、零部署，而且切換過程中沒有任何失敗請求。**
+之後的每一筆回應都由新排序後的模型服務。觀測到的傳播時間大約兩秒。**零客戶端變更、零部署，切換期間沒有任何請求失敗。**
 
-真正讓這件事可查證、而不只是一個宣稱的關鍵是：回應中的 `model` 欄位是伺服器端寫入的，而且每個回應都帶有 `x-model-router-selected-route` 標頭，顯示平台選了哪一條路由。你不需要相信客戶端說是哪個模型回答的——你可以直接從回應讀出來，再跟你的品質指標對照。
+讓這件事可查核而不只是宣稱的關鍵：回應中的 `model` 欄位是伺服器端寫入的，而且每一筆回應都帶有 `x-model-router-selected-route` 標頭，顯示平台選了哪一條路由。你不需要相信客戶端說是哪個模型回答的；你可以從回應上直接讀出來，再和你的品質指標對接。
 
-這正是每次有新模型發表時都會冒出來的那個問題的實務答案：*我們要怎麼在不中斷線上流量的情況下採用它？* 如果模型是寫死的，答案會牽涉到一整列發版流程。如果它在 router 後面，答案就是改一次排名，加上一個事後可以驗證的回應標頭。
+每次有新模型發表時都會冒出來的那個問題，這就是務實的答案：*我們要怎麼在不中斷線上流量的情況下採用它？* 如果模型是寫死的，答案牽涉到一列發版火車。如果它在 router 後面，答案就是改一次排序，加上一個你事後可以驗證的標頭。
 
----
+### 路由與提示快取的方向是相反的
 
-### 路由與提示快取，方向是相反的
+以下是那些向你推銷路由的人不會提的張力：**每一筆你路由走的請求，都是一筆打不到熱快取的請求。**
 
-有一個張力，在別人向你推銷路由時不會提到：**每一個被你路由走的請求，都是一個沒有打到熱快取的請求。**
+[Prompt Caching in Practice: From 7% to 74% Hit Rate](/blog/zh-prompt-caching) 從另一側量過這件事。前綴快取把輸入成本砍掉約 90%，但那只是因為一個穩定的前綴在快取 TTL 之內反覆落在同一個端點上。路由同時攻擊了這兩個前提：
 
-[第 3 篇](/blog/zh-prompt-caching)從另一個方向量測過這件事。前綴快取讓輸入成本降低約 90%——但那是因為一個穩定的前綴反覆落在同一個端點上，而且落在快取 TTL 之內。路由同時攻擊了這兩個前提：
+- **目的地不同，快取是冷的。** 每一家供應商、每一個模型都各自維護自己的前綴快取。把同一段系統提示送到三個模型，你就填滿了三個各自獨立的快取，也把 1.25–2× 的寫入溢價付了三次而不是一次。
+- **流量被切開，間隔變長。** 把一個工作負載切成四份，每個目的地看到的請求速率就只剩四分之一，因此請求之間的間隔變成四倍長。第 3 篇的量測對接下來會發生什麼講得很直白：請求到達間隔超過 TTL 的端點，根本累積不到任何命中。一個在滿載流量下運作良好的 5 分鐘 TTL，在四分之一流量下可能完全失效。
 
-- **換了目的地，快取是冷的。** 每一家供應商、每一個模型都各自保有自己的前綴快取。把同一段系統提示送給三個模型，你就填充了三份獨立的快取，等於把 1.25–2× 的寫入溢價付了三次，而不是一次。
-- **流量被拆散，間隔就變長。** 把一個工作負載拆成四路，每個目的地看到的請求速率只剩四分之一，於是請求之間的間隔變成四倍長。第 3 篇的實測對接下來會發生什麼講得很直白：請求間隔時間超過 TTL 的端點，根本累積不到任何命中。一個在滿載流量下運作順暢的 5 分鐘 TTL，在只剩四分之一流量時可能完全失效。
+哪一個效應勝出由算術決定，而且把兩邊的價差並排來看，結果並不接近：
 
-哪一邊會贏由算式決定，而把兩個價差並排來看，其實差距很明顯：
+| Lever                            | Order of magnitude         | From                                                                                                                      |
+| -------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Routing down a model *tier*      | up to 36× on the request   | 上文實測                                                                                                            |
+| Prefix cache on input tokens     | ~10× on the cached portion | [Prompt Caching in Practice: From 7% to 74% Hit Rate](/blog/zh-prompt-caching) |
+| Same model, different *provider* | ~2× on the rate            | 上文價格表                                                                                                         |
 
-| 槓桿 | 數量級 | 來源 |
-|-------|-------------------|------|
-| 往下路由一個模型*層級* | 該請求最高 36× | 前述實測 |
-| 輸入 token 的前綴快取 | 被快取部分約 10× | [第 3 篇](/blog/zh-prompt-caching) |
-| 同一個模型、不同*供應商* | 費率約 2× | 前述價格表 |
+**跨層級路由；不要把同一個層級拆到多家供應商。** 把一項分類任務送到便宜 36 倍的模型，價值遠高於你因此放棄的任何快取，而且其實你什麼也沒付出，因為不同的任務有不同的前綴，本來就不會共用那筆快取條目。但為了追逐約 2× 的費率差，而把*同一類*工作負載拆到多家供應商，可能會在輸入端把約 10× 的快取效益吐回去。那筆交易通常是虧的，而且正是團隊在「為了韌性」把兩家供應商配成輪詢負載平衡時，不小心做下的那筆交易，然後才納悶為什麼輸入端帳單變高了。
 
-**跨層級路由；但不要把同一個層級拆到不同供應商。** 把一個分類任務送到便宜 36 倍的模型，價值遠高於你因此放棄的任何快取——而且其實你什麼也沒放棄，因為不同的任務本來就有不同的前綴，本來就不會共用那筆快取項目。但是把*同一個*工作負載類別拆到不同供應商、去追那約 2× 的費率差距，卻可能在輸入側把約 10× 的快取效益還回去。這筆交易通常是虧的，而它正是團隊在「為了韌性」而在兩家供應商之間設定輪詢負載平衡時、不小心做下的那個決定——然後困惑於輸入帳單為什麼變高了。
+兩個務實的推論：讓每一條路由的流量密度高到仍能跨過 TTL，並且把故障轉移路由當成定義上就是*冷*的：切換之後的頭幾筆請求會在一個還沒建立起來的快取上付全價，這件事值得在你估算一次故障的成本之前就先知道。
 
-兩個實務上的推論：讓每一條路由的流量密度足以撐過 TTL；並且把故障轉移路徑預設當成**冷的**——故障轉移後最初那批請求，會在一個還不存在的快取上付全額，這件事值得在你估算一次故障的成本之前先知道。
-
----
+router 廠商也意識到了這個張力。DigitalOcean 的 Inference Router 支援 [`X-Model-Affinity` 標頭](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/)：傳入一個 session 識別碼，router 會照常路由第一筆請求，之後把該 session 的後續請求釘在同一個模型上，讓前綴快取在多輪迴圈中維持溫熱，而不是每做一次路由決策就讓它失效。如果你要採用任何 router，不管是第一方或第三方，在斷定路由與快取無法共存之前，先確認它有沒有提供對等的機制。
 
 ### 為 goodput 最佳化，而不是每秒 token 數
 
-大多數團隊用每秒 token 數或每秒請求數來思考推論效能。這些指標很重要，但並不完整。
+多數團隊是用每秒 token 數或每秒請求數來思考推論效能。這些指標有意義，但不完整。
 
-正確的指標是 **goodput**：在目標 SLO 內完成、且回傳正確、可用回應的請求。一個每秒處理 1,000 筆請求、卻有 15% 逾時、另有 10% 回傳幻覺的系統，其 goodput 是 750 筆「在 SLO 內且正確」的回應——而不是 1,000。
+正確的指標是 **goodput**：在目標 SLO 內完成、並回傳正確可用回應的請求。一個每秒處理 1,000 筆請求、但其中 15% 逾時、另外 10% 產生幻覺的系統，goodput 是每秒 750 筆「在 SLO 內且正確」的回應，不是 1,000 筆。
 
-這個重新框定改變了你思考路由的方式：
+這個重新定框會改變你思考路由的方式：
 
-- **原始吞吐量**（tokens/秒）是供應商指標，對容量規劃有用
-- **TTFT** 是使用者體驗指標，對同步應用至關重要
+- **原始吞吐量**（tokens/sec）是廠商指標，對容量規劃有用
+- **TTFT** 是使用者體驗指標，對同步型應用至關重要
 - **在目標延遲下每筆正確回應的成本**才是商業指標
 
-當你為 goodput 而路由時，決策矩陣看起來就不一樣了。Groq 的 LPU 在 Llama 3.3 70B 的輸出上提供市場上數一數二的吞吐量——數字很亮眼。但如果你的 SLO 是端到端 500ms 延遲，而 Groq 的佇列深度偶爾造成 800ms 的回應，那麼 Groq 的吞吐量數字幫不了你。為 goodput 而路由，不要為原始規格而路由。
+當你為 goodput 而路由時，決策矩陣看起來會不一樣。Groq 的 LPU 在 Llama 3.3 70B 上提供了業界數一數二的輸出吞吐量；數字很漂亮。但如果你的 SLO 是端到端 500ms 延遲，而 Groq 的佇列深度偶爾造成 800ms 的回應，那 Groq 的吞吐量數字幫不了你。為 goodput 而路由，不要為規格表而路由。
 
----
+### OpenAI 相容這個因素：綁定比看起來更弱
 
-### OpenAI 相容性因素：綁定效應比看起來更弱
+多供應商路由在 2026 年結構上很容易的原因之一：幾乎每一家推論供應商都提供 OpenAI 相容 API。多數情況下，切換供應商就是改一個 base URL 和一組 API 金鑰。就這樣。
 
-多供應商路由在 2026 年之所以在結構上很容易，有一個原因：幾乎每一家推論供應商都對外提供與 OpenAI 相容的 API。在大多數情況下，切換供應商就是改一個 base URL 與一組 API 金鑰。就這樣。
+這讓廠商綁定的論調比三年前弱得多。一家說「你加第二家供應商會有整合痛苦」的供應商，描述的是一個自 2023 年起就不再成立的現實。供應商之間的一對一對比很便宜。遷移不是六個月的專案，而是一天的工作。
 
-這讓供應商綁定的論點比三年前弱了非常多。一個說「你加第二家供應商會有整合的痛苦」的供應商，描述的是一個自 2023 年以來就不再成立的現實。供應商之間的正面對決（bake-off）成本很低。遷移不是一個六個月的專案——而是一天的工作。
+推論是：唯一可持續的差異化形式，是在你真實工作負載上可量測地更好的效能，而不是讓切換變痛苦的摩擦。
 
-由此可得的推論是：唯一可持續的差異化形式，是在你「實際的」工作負載上可量測地更好的效能，而不是讓切換變痛苦的摩擦力。
+### EMEA：主要的美國無伺服器供應商今天並不從歐盟供應
 
----
+在主要的美國純推論供應商之中，存在一個實質的地理落差。**Together AI、Fireworks AI 與 Groq 都是從美國境內的資料中心提供無伺服器推論**（Together 僅在企業級方案的專用端點上提供歐盟置放）。如果你有 GDPR 需求，這就不是偏好問題，而是法遵上的阻斷點。在許多情境下，個人資料在法律上不能於歐盟／歐洲經濟區之外被處理。
 
-### EMEA：無伺服器推論目前僅限美國
+DigitalOcean 在[阿姆斯特丹營運歐盟 GPU 基礎設施](https://www.digitalocean.com/blog/digitalocean-bare-metal-gpus-eu-data-center)（NVIDIA 裸機 GPU），這讓歐盟境內落地的推論今天就可以透過在該基礎設施上的**專用／自管**部署來達成。
 
-在主要的純推論（pure-play）供應商之中，存在一個有意義的地理缺口。**Together AI、Fireworks AI 與 Groq 都只從美國的資料中心運行無伺服器推論。**如果你有 GDPR 的要求，這不是偏好問題——而是合規的阻斷因素。在許多情境下，個人資料在法律上不得於歐盟／EEA 之外處理。
+**注意：** DigitalOcean 與主要的美國純無伺服器推論供應商（例如 Together AI、Fireworks AI、Groq 與 DeepInfra）一般並不提供實體託管於歐盟區域內的原生在地化無伺服器推論端點；他們是透過統一的全球／以美國為中心的控制平面來轉送請求。
 
-DigitalOcean 在[阿姆斯特丹（Amsterdam）營運歐盟 GPU 基礎設施](https://www.digitalocean.com/blog/digitalocean-bare-metal-gpus-eu-data-center)（NVIDIA 裸機 GPU），這讓「資料落地於歐盟」的推論今天就可透過在該基礎設施上進行**專用／自行管理**的部署來實現。
-
-不過要對目前的狀態說清楚：**目前沒有任何供應商——包括 DigitalOcean——在歐盟地區提供*無伺服器*推論端點。**無伺服器推論目前全面都僅限美國。所以對於今天一個對 GDPR 敏感的歐洲工作負載而言，務實的路徑是在歐盟 GPU 基礎設施上做專用推論，而非無伺服器。「歐盟的無伺服器」這個缺口是真實存在、至今無人填補的——值得誠實地把它講清楚，而不是當成一項已交付的能力。
-
-如果你要服務歐洲的使用者，請在挑架構之前就把這件事定案。問題不是「你偏好歐盟資料落地嗎？」——而是「你的法務團隊能核准在歐盟之外處理資料嗎？」對相當一類應用而言，答案是不能，而這個決定在任何跑分之前就先限縮了你的供應商清單。
-
----
+如果你在為歐洲使用者打造產品，請在挑架構之前先把這件事定案。問題不是「你會不會比較希望資料留在歐盟？」，而是「你的法務團隊能不能核准在歐盟之外處理資料？」。對於相當一部分的應用，答案是不行，而這個決定會在任何基準測試之前就先限縮你的供應商清單。對這些應用來說，你需要部署自己在歐盟落地的推論基礎設施，可以在 DigitalOcean 的[歐盟 GPU 基礎設施](https://www.digitalocean.com/blog/digitalocean-bare-metal-gpus-eu-data-center)上，也可以在提供歐盟落地無伺服器推論端點的第三方供應商上。
 
 ### 為韌性而設計：如果你需要 99.9% 以上
 
-如果你的可用性要求超過任何單一推論供應商所能交付的水準——而 99.9% 以上高於大多數供應商生產環境 API 的量測表現——那麼後備架構就不是選配項。
+如果你的可用度要求超過任何單一推論供應商能提供的水準（而 99.9% 以上高於多數供應商生產 API 的實測表現），後備架構就不是選配。
 
-一個最小化的韌性架構：
-1. **主要供應商**——你主力工作負載類別中表現最佳的選項
-2. **次要供應商**——相同模型或同等品質、不同供應商
-3. **故障轉移邏輯**——在主要供應商逾時、錯誤率達門檻或被速率限制時，自動路由到次要供應商
-4. **斷路器（circuit breaker）**——防止重試風暴放大局部的中斷
-5. **可觀測性**——觸發故障轉移時發出警報，並追蹤你已在次要供應商上運行多久
+一套最小可行的韌性架構：
 
-先前的路由分類法仍然適用：用主要供應商處理標準流量、用次要供應商作為故障轉移，並把不同類型的工作負載導向其適當的層級。架構不需要複雜——一個設定得當、含兩個供應商端點的 LiteLLM 或 Inference Router 配置，就能涵蓋大多數情況。
+1. **主要供應商**：對你主力工作負載類別表現最好的選項
+2. **次要供應商**：相同模型或同等品質，但不同供應商
+3. **故障轉移邏輯**：在主要供應商逾時、錯誤率超過門檻或被限流時，自動路由到次要供應商
+4. **斷路器**：避免重試風暴把局部故障放大
+5. **可觀測性**：故障轉移觸發時發出告警，並追蹤你在次要供應商上待了多久
 
-**這件事的程式碼其實少到什麼程度。** 在我做來觀察這個過程的 demo 裡，一個三步驟的 agent（retrieve → summarize → extract）在主要端點開始回傳 429 的情況下，用兩條 lane 服務同一個請求。兩條 lane 的 agent 程式碼一模一樣，唯一的差別是設定裡的一個 tuple：
+前面那套路由分類法仍然適用：主要供應商跑標準流量、次要供應商當故障轉移，並把不同的工作負載型態路由到各自合適的層級。這個架構不需要複雜：一套設定得當、掛上兩個供應商端點的 LiteLLM 或 Inference Router 就能涵蓋多數情況。
+
+**這實際上只需要多少程式碼。** 在我為了觀察這件事而做的 demo 裡，一個三步驟的 agent（retrieve → summarize → extract）在主要端點回傳 429 的情況下，用兩條車道服務同一筆請求。兩條車道的 agent 程式碼逐位元組完全相同。唯一的差別是組態裡的一個 tuple：
 
 ```python
-ENDPOINTS = (PRIMARY,)         # 單一端點 lane：把重試次數燒完，然後失敗
-ENDPOINTS = (PRIMARY, ALT)     # 路由 lane：中途故障轉移，然後完成
+ENDPOINTS = (PRIMARY,)         # single-endpoint lane: burns its retries, then fails
+ENDPOINTS = (PRIMARY, ALT)     # routed lane: fails over mid-run and finishes
 ```
 
-單一端點那條 lane 耗盡重試後死掉。路由那條完成了任務，而且那條 lane 上的使用者完全不會知道發生過故障轉移——它只出現在決策日誌裡。（故障是由一個本地 proxy 注入的，所以每次執行結果都相同；這個練習展示的是故障轉移的行為，完全不能用來說明任何供應商真實的錯誤率。它也不是延遲基準測試——路由那條 lane 通常會在切換前多付一個失敗請求的錢。）
+單端點車道把重試耗盡然後死掉。有路由的車道故障轉移之後完成了任務，而那條車道上的使用者永遠不會知道發生過故障轉移；它只出現在決策記錄裡。（故障是由本機 proxy 注入的，所以這次執行是決定性的；這個練習展示的是故障轉移行為，對任何供應商真實的錯誤率並沒有任何說法。它也不是延遲基準測試；有路由的那條車道通常要先付掉一筆失敗請求才會切換。）
 
-上面那份清單沒有涵蓋、但在生產環境會咬人的兩個失效模式：
+上面那份檢查清單沒涵蓋到、而且在生產環境都會咬人的兩種失效模式：
 
-**你的次要供應商是不同的模型，所以你的 eval 必須在兩邊都過。**「相同模型或同等品質」這句話承載了太多東西。如果次要端點是另一個模型——而跨供應商時通常就是——那麼故障轉移就是一次無聲的品質變動。請拿你的評測集去跑後備路徑，而不只是主要路徑，否則一次供應商事故就會變成一次沒人察覺的降級，最後只會從使用者抱怨裡浮現。
+**你的次要供應商是不同的模型，所以你的評測必須在兩邊都通過。** 那份清單裡的「相同模型或同等品質」承擔了很多工作。如果次要是不同的模型（而跨供應商時通常就是），那麼故障轉移就是一次無聲的品質變更。請把你的評測集也跑在後備路徑上，而不只是主要路徑，否則一次供應商事故就會變成一次沒被偵測到的降級，最後只在使用者抱怨裡浮現。
 
-**故障轉移有帳單，不只有時長。** 如果次要端點在更高一個層級，一次六小時的事故就同時是成本事件與可用性事件。而且承接前一節：後備路徑在定義上就是冷的——切換後最初那些請求，會在一個還沒被填充的前綴快取上付全額。在你真的需要它之前先把這筆算出來，別讓事故檢討會是第一次有人做這個算術。
+**故障轉移有帳單，不只有持續時間。** 如果次要供應商在上一個層級，一次六小時的事故同時是成本事件，不只是可用度事件。而且如前一節所述，後備路徑在定義上就是冷的：切換之後的頭幾筆請求，會在一個還沒被填滿的前綴快取上付全價。請在你需要它之前就把這筆算清楚，別讓事故檢討會是第一次有人做這個算術。
 
-關鍵原則是：**刻意把後備路徑設計出來，而不是假設你的主要供應商永遠不會出狀況。**一個建立了韌性多供應商架構、並把其中一家當作主力工作負載類別主要端點的團隊，處境會比一個出於原則堅持單一供應商、第一次事故就手忙腳亂的團隊好得多。
+關鍵原則是：**刻意設計後備路徑，而不是假設你的主要供應商永遠不會有糟糕的一天。** 一個打造了有韌性的多供應商架構、並把其中一家供應商留作主力工作負載類別主要端點的團隊，處境會比一個基於原則只用單一供應商、然後在第一次事故時手忙腳亂的團隊要好。
 
----
+### 什麼時候 DigitalOcean 該是你的主要供應商？
 
-### DigitalOcean 什麼時候該當你的主要供應商——什麼時候不該
+要在多供應商架構裡安置任何一家供應商，有用的方式是問它應該*主要*負責什麼，而不是問它該不該是你唯一的一家。對 DigitalOcean 來說，誠實的答案是：它適合當主力工作負載的預設選擇，以及路由控制平面。
 
-要在多供應商架構裡替任何一家供應商定位，有用的問法是「它該當什麼的*主要*供應商」，而不是「它該不該是你唯一的供應商」。對 DigitalOcean，誠實的答案是：主力工作負載與路由控制平面的合理預設值，而在幾件特定的事情上則是錯的選擇。
+它憑什麼拿到主要位置：
 
-它能勝任主要供應商的地方：
-- 全端整合（推論 + 運算 + 向量資料庫 + 儲存），TCO 比多雲方案低 20–40%，根據 DigitalOcean 自己發表的 [Deploy 2026 分析](https://www.nasdaq.com/press-release/digitalocean-unveils-ai-native-cloud-built-inference-era-2026-04-28)——這是廠商自行發布的數字，請當作方向性參考，實際採信前先用你自己的技術堆疊算一遍
-- 第一方路由層，無須第三方相依即可讓每個請求選到剛好夠用的模型
-- 透過在阿姆斯特丹 GPU 基礎設施上的專用推論，達成歐盟資料落地（包含 DO 在內，目前尚無任何供應商提供「歐盟的無伺服器」）
-- 單一 VPC、單一帳務關係、整合的可觀測性
+- 全端整合（推論 + 運算 + 向量資料庫 + 儲存）的 TCO 比多雲替代方案低 20–40%，出自 DigitalOcean 自己的 [Deploy 2026 分析](https://www.nasdaq.com/press-release/digitalocean-unveils-ai-native-cloud-built-inference-era-2026-04-28)；這是廠商自行公布的，所以請當成方向性參考，並在依賴它之前先為你自己的技術堆疊建模
+- 第一方路由層，不需要第三方相依就能處理模型的合適層級選擇
+- 透過在[阿姆斯特丹 GPU 基礎設施](https://www.digitalocean.com/blog/digitalocean-bare-metal-gpus-eu-data-center)上的專用推論達成歐盟資料落地。
+- 單一 VPC、單一帳務關係、整合的可觀測性。
 
-它不該當主要供應商的地方：
-- 如果你需要在模型發表當天就用上絕對最新的前沿模型，你會直接向 Anthropic／OpenAI／Google 取得
-- 如果你需要 Together AI 那種開源模型目錄的深度，在 DO 上找不到同樣的廣度
-- 微調（fine-tuning）與 LoRA 工作流需要不同的供應商（Together、Fireworks、Replicate）
+### 關於多供應商路由的常見問題
 
-由此推出的路由架構是：DO 處理主力工作負載、批次處理與 EMEA 合規需求；專家型供應商則透過路由層處理它們各自的利基。這不是讓步——而是一套誠實的架構，而且它比一個不符合你實際在建構什麼的單一供應商強制令要好。
+#### 1. 跨多家供應商路由會增加延遲嗎？
 
----
+要看路由發生在哪裡。第三方閘道坐在你的應用程式與模型之間，所以你要多付一次網路來回，通常是數十毫秒，這對 500ms 的 TTFT 預算有影響，對批次工作則沒有。推論平台內部的第一方路由避開了對外跳點，但路由決策本身仍然要花時間：DigitalOcean 的文件把 Inference Router 的開銷標為每筆請求約 200ms。在往任一方向下定論之前，先在你自己的流量上量測，並且針對任何吃緊的 TTFT 目標，把 router 的決策時間也算進去，而不只是網路路徑。
 
-### 常見問題
+#### 2. 我的流量很低。我真的需要 router 嗎？
 
-**跨多家供應商做路由會不會增加延遲？**
-要看路由發生在哪裡。第三方閘道坐在你的應用與模型之間，所以你會多付一次網路往返——通常是幾十毫秒，這對 500ms 的 TTFT 預算有影響，對批次工作則沒有。內建在推論平台裡的第一方路由則完全省掉這一跳。在下結論之前先用你自己的流量量一次；路由器內部的決策時間，通常相對於網路路徑可以忽略不計。
+大概不需要。路由要能划算，前提是你的流量真的混雜了不同的任務複雜度（便宜的分類與昂貴的推理並存），因為節省來自於*不要*把簡單工作送到最高層級。如果你在中等流量下只有一類工作負載跑在一個模型層級上，router 增加的營運面積換來的是以「幾塊美金」計的節省。等到流量組合變多元、或每月帳單開始刺痛時再回來檢視。
 
-**我的流量很小，還需要路由器嗎？**
-大概不需要。路由要划算，前提是你的流量真的混合了不同的任務複雜度——便宜的分類和昂貴的推理並存——因為省下來的錢來自「不把簡單工作送到最高層級」。如果你只有一個工作負載類別、跑在一個模型層級上、量也不大，那麼路由器帶來的營運面增加，換到的只是幾塊美元。等流量開始多樣化、或每月帳單開始讓你有感時再回頭看。
+#### 3. 換供應商實際上要花多久？
 
-**換供應商實際上要多久？**
-只要供應商提供與 OpenAI 相容的 API——現在幾乎都有——那就是改一個 base URL 和一組 API 金鑰。真正慢的部分不是程式碼：在你的評測集上重新驗證輸出品質、從你的地區重測延遲、再跑一次你們公司要求的資安審查。請用「天」來估評測時間，而不是用「月」來估整合時間。
+對任何提供 OpenAI 相容 API 的供應商（幾乎全部都是）而言，就是一個 base URL 和一組 API 金鑰。真正慢的部分不是程式碼：在你的評測集上重新驗證輸出品質、從你的區域重做延遲量測，以及重跑你們組織要求的任何資安審查。請為評估編列以天為單位的預算，而不是為整合編列以月為單位的預算。
 
-**路由器會不會把該用大模型的請求送去小模型？**
-這正是真正的失效模式，也是為什麼可觀測性比省下的錢更重要。DigitalOcean 的 Inference Router 會在每個回應上帶回 `x-model-router-selected-route` 標頭，所以你可以記錄每個請求實際上是由哪個模型服務的，再和你的品質指標對接。如果某條路線分類錯誤，你會在這份資料裡先看到，而不是在使用者的抱怨裡。對於「降級絕對不可接受」的請求，就明確指定模型名稱來路由；其餘的再交給路由器。
+#### 4. router 會不會把該用大模型的請求送去小模型？
 
-**歐盟可以用無伺服器推論嗎？**
-今天不行，而且任何供應商都不行。Together AI、Fireworks AI、Groq 與 DigitalOcean 的無伺服器推論全都由美國資料中心提供。如果你的資料不能離開歐盟／EEA，你的選項是在歐盟 GPU 基礎設施上做專用推論——DigitalOcean 在阿姆斯特丹有，其他幾家也有——而不是無伺服器端點。任何跟你說得不一樣的，講的是藍圖而不是現況。
+那正是真正的失效模式，也是為什麼可觀測性比節省更重要。DigitalOcean 的 Inference Router 在每一筆回應上都會回傳 `x-model-router-selected-route` 標頭，所以你可以記錄實際由哪個模型服務了每一筆請求，並把它和你的品質指標對接。如果某條路由分類錯了，你會在那份資料裡看到，而不是在使用者抱怨裡看到。對於降級會不可接受的任何情境，請明確依模型名稱路由，把 router 留給不會有這種問題的流量。
 
-**剛有更好的模型發表。我可以在不重新部署的情況下採用它嗎？**
-如果模型名稱是你應用程式裡的字串，不行——那是一次程式碼修改，而且每個出現這個字串的地方都要改。如果你的流量走 router，可以：你透過 API 重新排序路由策略，之後的請求就由新模型服務，不需要客戶端修改、也不需要發版。在前述的 demo 裡，傳播時間大約兩秒，切換過程中沒有失敗請求。事後請用 `x-model-router-selected-route` 標頭去驗證，而不是假設；另外也請先拿你的評測集跑過新模型——一次毫無摩擦的切換，只有在你切過去的那個東西真的在你的工作負載上更好時，才算是優勢。
+#### 5. 我可以把那些 99.1–99.8% 的數字直接寫進自己的 SLA 嗎？
 
-**那個 99.1–99.8% 可以直接寫進我自己的 SLA 嗎？**
-不行。那是單一第三方監測機構 30 天視窗的數字，最多只能當方向性參考——你實際量到的可用性取決於地區、模型與流量型態。如果你要對自己的客戶承諾可用性，請從每家供應商公開的狀態頁與合約 SLA、加上你自己的量測來推導，並且把故障轉移路徑做到足以補上「你承諾的水準」與「任何單一供應商保證的水準」之間的落差。
+不行。那些來自單一第三方監測服務的 30 天窗口，充其量只是方向性的；你實測到的可用度取決於區域、模型與流量形態。如果你要對自己的客戶寫下可用度承諾，請從每一家供應商公布的狀態頁與合約 SLA，加上你自己的量測儀表來推導，並把故障轉移路徑的規模設計成能覆蓋「你承諾的」與「任何單一供應商保證的」之間的落差。
 
-**第一方路由是不是換了一種形式的 lock-in？**
-它比看起來弱，理由和供應商綁定普遍偏弱是同一個：路由器講的是與 OpenAI 相容的 API，所以要拿掉它，等於把 base URL 指到別的地方。你會失去的是路由策略與單一儀表板的可觀測性，而不是你的應用程式碼。真正會把你鎖住的，是把路由邏輯寫在一套專有、不可移植的介面上——這一點在你採用任何閘道時都值得先確認，不管它是不是第一方的。
+#### 6. 第一方路由不就是一種新的綁定嗎？
 
----
+它比看起來更弱，理由和供應商綁定普遍偏弱一樣：router 講的是 OpenAI 相容 API，所以要移除它就是把 base URL 指到別的地方。你會失去的是路由政策與單一儀表板的可觀測性，不是你的應用程式碼。真正會把你鎖住的，是把路由邏輯建立在專有、不可攜的介面上，這件事值得在你採用的任何閘道上檢查，不論是第一方或第三方。
 
-### 總結
+### 結論
 
-多供應商路由不是對推論供應商的威脅——它是認真的團隊所建立的架構。原因是結構性的：沒有單一供應商擁有所有模型、可用性缺口要求故障轉移，而價差——同一個模型跨供應商雖然不大，但跨模型層級極為懸殊——讓路由在經濟上合理。
+多供應商路由不是對推論供應商的威脅，它就是認真的團隊會蓋出來的架構。理由是結構性的：沒有任何單一供應商擁有全部模型、可用度落差使故障轉移成為必要，而價差（同一個模型跨供應商差距不大，跨模型層級則極為懸殊）讓路由在經濟上合理。
 
-在實務上有效的路由分類法：
+實務上行得通的路由分類法：
+
 - 批次／離線 → 最便宜的供應商
-- 即時聊天 → 最低 TTFT 的供應商
-- 小眾模型 → 目錄最廣的供應商
-- 對合規敏感 → 在正確地區具認證的供應商
-- 後備 → 主要供應商失效時的次要供應商
+- 即時對話 → TTFT 最低的供應商
+- 冷門模型 → 型錄最廣的供應商
+- 對法遵敏感 → 在正確區域且有認證的供應商
+- 後備 → 主要供應商失敗時切到次要供應商
 
-工具早已存在（LiteLLM、OpenRouter、Portkey），而且你大概也已經評估過它們。第一方路由的差異化在於營運層面：沒有延遲跳轉、整合的帳務與可觀測性、路由邏輯就活在平台之內。
+你也可以參考本 *Inference in Production Series* 系列的其他文章：
 
-正確的框架是 goodput——在 SLO 內完成且輸出正確的請求——而不是原始的每秒 token 數。為「在目標延遲下每筆正確答案的成本」而路由，而不是為最便宜的 token。
-
-EMEA 的定位是真實的：所有供應商的無伺服器推論都僅限美國，因此對 GDPR 敏感的歐洲工作負載來說，今天的歐盟落地意味著在歐盟 GPU 基礎設施上的專用推論（DO 在阿姆斯特丹就有），而非無伺服器。「歐盟的無伺服器」這個缺口至今無人填補——值得誠實地講清楚，而不是任何人可以宣稱的能力。
-
-務實的目標是：為主力工作負載類別選定一家供應商、把它的路由層當作你的控制平面，並對哪些工作負載該放在別處保持誠實。那是一套能撐過生產環境考驗的架構。
-
----
-
-*這是第 5 篇——5 篇系列文章「生產環境中的 LLM 推論」的最後一篇。[第 1 篇](/blog/zh-llm-bill-3x) 涵蓋 LLM API 成本的隱藏結構。[第 2 篇](/blog/zh-choosing-the-right-model) 涵蓋模型選擇方法論。[第 3 篇](/blog/zh-prompt-caching) 深入探討提示快取（prompt caching）。[第 4 篇](/blog/zh-full-stack-ai-tco) 檢視完整 AI 技術堆疊的總體擁有成本。*
-
----
+1. [Why Your LLM Bill Is 3× What You Expected](/blog/zh-llm-bill-3x)
+2. [How to Choose the Right LLM Model for Inference Use Case](/blog/zh-choosing-the-right-model)
+3. [Prompt Caching in Practice: From 7% to 74% Hit Rate](/blog/zh-prompt-caching)
 
 ### 參考資料
 
-- [2026 年最佳 LLM API 供應商](https://tokenmix.ai/blog/best-llm-api-providers) — TokenMix
-- [DigitalOcean 推論定價](https://docs.digitalocean.com/products/inference/details/pricing/) — DigitalOcean（模型層級價格階梯的來源）
-- [Groq 定價](https://groq.com/pricing)／[Fireworks 定價](https://fireworks.ai/pricing)／[Together 定價](https://www.together.ai/pricing) — Llama 3.3 70B 比較所依據的官方定價頁
-- [OpenRouter vs LiteLLM vs Portkey：2026 年最佳 LLM 閘道](https://toolhalla.ai/blog/openrouter-vs-litellm-vs-portkey-2026) — ToolHalla
-- [Groq vs Together AI vs Fireworks AI](https://toolhalla.ai/blog/groq-vs-together-vs-fireworks-2026) — ToolHalla
-- [比較託管開源 LLM 的 API 供應商](https://hammansamuel.medium.com/comparing-api-providers-for-hosted-open-source-llms-3a5b2c9982fe) — Medium
-- [用 Inference Router 做多模型 API 成本治理](https://www.digitalocean.com/community/tutorials/inference-router-multi-model-api-cost-governance) — DigitalOcean（2026 年 6 月實測）
-- [如何使用 Inference Router](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/) — DigitalOcean 文件
-- [KV Caching 如何在規模下大幅削減 LLM 推論成本](https://www.digitalocean.com/community/conceptual-articles/how-kv-caching-slashes-llm-inference-costs-at-scale) — DigitalOcean
-- [LLM 推論的三難困境](https://www.digitalocean.com/resources/article/llm-inference-trilemma) — DigitalOcean
-- [AI 正常運作時間 SLA：為什麼你的業務需要多模型後備策略](https://universal.cloud/en/blog/ai-uptime-vergeten-risico/) — Universal.cloud
+- [Best LLM API Providers in 2026](https://tokenmix.ai/blog/best-llm-api-providers) - TokenMix
+- [DigitalOcean Inference Pricing](https://docs.digitalocean.com/products/inference/details/pricing/) - DigitalOcean（模型層級價格階梯的來源）
+- [Groq Pricing](https://groq.com/pricing) / [Fireworks Pricing](https://fireworks.ai/pricing) / [Together Pricing](https://www.together.ai/pricing) - Llama 3.3 70B 比較所依據的官方定價頁
+- [OpenRouter vs LiteLLM vs Portkey: Best LLM Gateway in 2026](https://toolhalla.ai/blog/openrouter-vs-litellm-vs-portkey-2026) - ToolHalla
+- [Groq vs Together AI vs Fireworks AI](https://toolhalla.ai/blog/groq-vs-together-vs-fireworks-2026) - ToolHalla
+- [Comparing API Providers for Hosted Open-Source LLMs](https://hammansamuel.medium.com/comparing-api-providers-for-hosted-open-source-llms-3a5b2c9982fe) - Medium
+- [Multi-Model API Cost Governance with the Inference Router](https://www.digitalocean.com/community/tutorials/inference-router-multi-model-api-cost-governance) - DigitalOcean（2026 年 6 月實測）
+- [How to Use Inference Router](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/) - DigitalOcean Documentation
+- [How KV Caching Slashes LLM Inference Costs at Scale](https://www.digitalocean.com/community/conceptual-articles/how-kv-caching-slashes-llm-inference-costs-at-scale) - DigitalOcean
+- [The LLM Inference Trilemma](https://www.digitalocean.com/blog/llm-inference-tradeoffs) - DigitalOcean
+- [AI uptime SLA: why your business needs a multi-model fallback strategy](https://universal.cloud/en/blog/ai-uptime-vergeten-risico/) - Universal.cloud
+
+---
+
+_這是「生產環境中的 LLM 推論」系列 5 篇文章中的第 4 篇。[第 1 篇](/blog/zh-llm-bill-3x)談 LLM API 成本的隱藏結構。[第 2 篇](/blog/zh-choosing-the-right-model)談模型選擇方法論。[第 3 篇](/blog/zh-prompt-caching)深入探討提示快取。[第 5 篇](/blog/zh-full-stack-ai-tco)檢視完整 AI 技術堆疊的總體擁有成本。_

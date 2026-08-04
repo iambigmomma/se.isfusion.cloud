@@ -1,209 +1,210 @@
 ---
-title: '為你的使用情境選擇正確的模型——實務指南'
+title: '為你的推論使用情境選擇正確的模型'
 description: '模型選型——而非硬體——是 GenAI 支出最大的單一槓桿。基準測試是篩選用的過濾器，不是最終判決。本文說明在生產環境中真正有效的評測方法，並深入探討翻譯、RAG、程式碼生成與客戶支援四大情境。'
 banner: 'choosing-the-right-model-banner'
-publishedAt: '2026-06-12'
+publishedAt: '2026-07-08'
 tags: 'ai-ml,gen-ai,llm,model-evaluation'
 ---
 
-> _利益揭露:我是 DigitalOcean 的 Solutions Architect,所以文中提到 DigitalOcean 產品時,是「業內人的觀點」而非中立第三方——這些地方我都會明確標示,其餘分析則盡量保持廠商中立。以下皆為個人觀點。_
+> _利益揭露：我是 DigitalOcean 的 Solutions Architect，所以文中提到 DigitalOcean 產品時，是「業內人的觀點」而非中立第三方——這些地方我都會明確標示，其餘分析則盡量保持廠商中立。以下皆為個人觀點。_
 
-### 前言
+_本文的英文版本已發表於 [DigitalOcean Community](https://www.digitalocean.com/community/tutorials/how-to-choose-llm-model-for-inference)。_
 
-剛接觸生產級 LLM 工作的工程團隊常見一種模式：他們從排行榜頂端挑一個模型、整合進系統，然後接下來好幾個月都在想辦法降低帳單。這個順序是反過來的。
+_一套可重複的方法：用你自己的資料評測來挑選推論模型，並附上 DigitalOcean serverless 的第一手成本數字。方法本身與供應商無關；DigitalOcean 特有的數字都標明出處。_
 
-模型選型——不是基礎設施、不是提示最佳化、也不是批次處理策略——才是 GenAI 部署中對品質與成本最大的單一槓桿。在一個簡單的分類任務上，Claude Sonnet 4.6 與 Claude Haiku 4.5 的價格差距大約是 12 倍。如果 Haiku 在你的特定任務上能產出同等品質，那麼你每多用一天 Sonnet，就是多付了 12 倍。
+### 模型選擇能讓成本相差好幾個數量級
 
-問題在於，大多數團隊挑模型的方式是錯的：他們看基準測試排行榜，找出分數最高的那個，然後就上線了。本文會說明為什麼這種做法會得到次佳結果——以及正確的評測流程實際上是什麼樣子，並透過四個不同的使用情境類別來闡述。
+模型選型，不是基礎設施、不是提示最佳化、也不是批次處理策略，才是 GenAI 部署中對品質與成本最大的單一槓桿。[Claude Sonnet 4.6](https://docs.anthropic.com/en/docs/about-claude/pricing) 標價每百萬輸入 token $3.00；[Claude Haiku 4.5](https://docs.anthropic.com/en/docs/about-claude/pricing) 標價 $1.00：在一個簡單的分類任務上就是 3 倍價差。若拿來對比 [DigitalOcean Serverless Inference](https://docs.digitalocean.com/products/inference/details/pricing/) 上一個夠強的開源權重模型，在完全相同的 token 形狀下，這道落差會拉大到 36 倍（量測見 [Multi-Model API Cost Governance with the Inference Router](https://www.digitalocean.com/community/tutorials/inference-router-multi-model-api-cost-governance)，2026 年 6 月）。
 
-### 重點摘要
+這是兩組各自獨立的比較，不是一個層層放大的數字：3 倍價差是 Anthropic 自家產品線內部的差距，36 倍則是另一組獨立量測、對比 DO Serverless 上開源權重模型的結果。如果你要單獨引用其中任一個數字，請把兩者分開講。
 
-- 模型選型——而非硬體——是 GenAI 成本與品質兩者最大的單一槓桿。
-- 先建立你的準確度下限，然後挑出能跨過這條線的*最小*模型——而不是排行榜頂端那一個。
-- 針對每種任務使用正確的指標：翻譯用 COMET（不是 BLEU）、RAG 用忠實度（groundedness）、程式碼用私有的評測框架、面向客戶的對話則用 TTFT。
-- 基準測試是篩選用的過濾器，不是最終判決：MMLU 已飽和、SWE-bench Verified 容易受污染影響（約 70% 對比較難的 Pro 測試集約 23%），而同一個模型在不同評測框架下分數可能相差 10–15%。
-- 你自己的資料才是唯一具權威性的訊號——而且較小的專才在自己的主場上，經常能擊敗較大的通才。
+如果更小的模型在你的特定任務上能產出同等品質，那麼多用大模型的每一天都是在多付錢，而且不是多付百分之幾，是多付好幾倍。
 
----
+> **價格說明：** 文中的 token 費率為 2026 年 6 月各供應商文件與 [DigitalOcean Inference 定價](https://docs.digitalocean.com/products/inference/details/pricing/)的公告價。編列預算前請先確認即時費率。模型產品線變動也很快；引用這組比較之前，請先確認是否已有更新的旗艦模型取代文中提到的型號。
 
 ### 選型框架：先定準確度下限，再談成本
 
-模型選型正確的心智模型不是「找出最好的模型」——而是 **「先找出你任務的準確度下限，再找出能跨過這條線的最小模型」**。
+正確的順序是 **「先找出你任務的準確度下限，再找出能跨過這條線的最小模型」**。
 
-把它想成在雇用承包商。你不會請結構技師來重新粉刷一個房間——你會請技能與工作相稱的人。如果你的任務需要在行銷文案中拿捏細膩的語氣，你大概需要那位資深技師。如果任務只是從文件中擷取一個日期，那麼便宜 80% 的菜鳥也綽綽有餘。錯誤不一定在於雇錯了人——而是在沒檢查便宜的人是否也能勝任的情況下，就雇了那個貴的。
-
-![依準確度下限篩選不同大小模型的篩子](https://res.cloudinary.com/iambigmomma/image/upload/v1782378355/blog/model-selection/accuracy_floor.png)
+![A sieve sorting differently-sized models against an accuracy floor](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Chosing%20the%20right%20model%20for%20your%20Inference%20use%20case/accuracy_floor.png)
 
 _把候選模型倒過你的準確度下限，留下能通過的最小那一個。_
 
-流程是這樣運作的：
+1. **定義你的準確度下限**：在真正重要的指標上，可接受的最低表現。不是「愈好愈好」，而是低於這條線產品就會壞掉的門檻。
+2. **用你自己的資料評測**：取樣自你生產環境的分布，而不是基準測試的分布。
+3. **從小開始往上試**：通過你評測的模型都算候選，最便宜的那個勝出。
+4. **模型更新時重新檢視**：半年前需要 Sonnet 才做得到的事，現在可能 Haiku 就夠了。
 
-1. **定義你的準確度下限**——在對你的使用情境重要的特定指標上，最低可接受的表現是什麼？不是「越好越好」，而是低於這個門檻產品就壞掉的那條實際界線。
-2. **用你自己的資料做評測**——使用你生產環境分布中具代表性的樣本，而不是基準測試的分布。
-3. **找出能跨過你下限的最小模型**——從小開始往上試。通過你評測的模型都是候選者；最便宜的候選者勝出。
-4. **在模型更新時重新檢視**——供應商發布新模型的頻率很高。六個月前能跨過你下限的最便宜模型，可能已被新的層級超車。
+### 翻譯：用 COMET 而非 BLEU，大量翻譯用 NMT 而非 LLM
 
-本文每一個論點，都是把同樣的邏輯套用到四個特定的使用情境類別上。
+翻譯暴露出一個根本的評測缺陷：**容易計算的指標，往往量不到真正重要的東西。**
 
----
+#### BLEU 與人類判斷的相關性很差
 
-### 翻譯：指標錯配的案例研究
+[BLEU（bilingual evaluation understudy）](https://www.digitalocean.com/community/tutorials/automated-metrics-for-evaluating-generated-text)計算模型輸出與參考譯文之間的 n-gram 重疊。它快速而且具決定性。它同時也是一個很差的品質預測指標，只要任務需要細膩度就不準。
 
-翻譯是個實用的案例研究，因為它暴露了許多團隊評測 LLM 時的一個根本缺陷：**容易計算的指標，往往沒在衡量真正重要的東西。**
+COMET（Crosslingual Optimized Metric for Evaluation of Translation）是一個以人類評分訓練出來的神經網路指標。它與母語者評估品質的方式相關性明顯更好，而且可能把 BLEU 的排名整個顛倒過來。BLEU 分數較高的模型，有時 COMET 分數反而較低。
 
-#### BLEU 對比 COMET：為什麼標準指標會說謊
+任何認真的翻譯評測都應該以 COMET 為主要指標，BLEU 只當作 sanity check。
 
-BLEU——傳統的機器翻譯指標——計算模型輸出與參考譯文之間的 n-gram 重疊。它速度快、具確定性、容易計算。但對任何需要細膩拿捏的東西來說，它也是個很差的品質預測指標。
+#### 大量翻譯 NMT 勝出；細膩度 LLM 勝出
 
-把 BLEU 想成靠數一首詩押了幾個韻來評斷它。一首押韻完美卻言之無物的詩會得高分；一首捕捉到你前所未見的情感、卻打破了韻腳的詩則會得低分。這個指標最佳化的是錯的東西。
+在高量翻譯上，速度差距是決定性的。Google 的 NMT 引擎以毫秒級回傳結果，最快可達 LLM 的 **20 倍**。DeepL 在高吞吐量下表現相當。
 
-COMET（Crosslingual Optimized Metric for Evaluation of Translation，翻譯評估跨語言最佳化指標）是一個以人類評斷訓練出來的神經網路指標。它與真實人類讀者評斷翻譯品質的方式相關性高得多——而且關鍵在於，它能讓 BLEU 的排名翻轉。一個在 BLEU 上得分較高的模型，有時在 COMET 上反而得分較低，因為人類眼中的品質與 n-gram 重疊無關。
+![A fast stamping machine beside a careful quill-and-ink scribe](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Chosing%20the%20right%20model%20for%20your%20Inference%20use%20case/fast_machine_vs_careful_scribe.png)
 
-對任何認真的翻譯評測來說，COMET 應該是你的主要指標，BLEU 則只留作健全性檢查（sanity check）。
+_大量翻譯：NMT 是壓印機，LLM 是仔細的抄寫員，比較慢，但更懂細膩之處。_
 
-#### DeepL 對比 LLM：對大量工作而言，速度是決定性變數
+LLM 在長篇 context、慣用語、低資源語言，以及重視品牌調性的文案上勝出。[Lokalise 的盲測研究](https://lokalise.com/blog/what-is-the-best-llm-for-translation/)比較了五套引擎在 EN→DE/PL/RU 上的表現，由母語者做兩兩比較，發現 Claude 3.5 的「良好」評價比例最高（78%）。[Rapidata 的資料集](https://huggingface.co/posts/jasoncorkill/521063845119914)（DeepL 對比 DeepSeek-R1／Llama／Mixtral，**超過 51,000 位母語者**，已公開在 Hugging Face 上）則發現，沒有哪一類在所有語言配對與內容型態上全面勝出。
 
-對高流量翻譯而言，DeepL 與 LLM 之間的速度差距是決定性的。Google 的 Neural Machine Translation 引擎能在毫秒內交出結果——比 LLM 快上達 **20 倍**。DeepL 在高吞吐量下表現相當。對於每小時要處理數千個片段的大量文件翻譯流程來說，那個速度差距會直接反映在基礎設施成本上。
+| 使用情境                             | 建議做法                                                                            |
+| ------------------------------------ | ----------------------------------------------------------------------------------- |
+| 大量、重複性高的文件                 | 以 DeepL 或 Google NMT 為主要引擎                                                   |
+| 行銷文案、品牌調性、對語氣敏感的內容 | 用 LLM（Claude）做最後潤飾                                                          |
+| 低資源語言配對                       | 微調過的 [NLLB-200 3.3B](https://huggingface.co/facebook/nllb-200-3.3B) 往往勝過通用的 7-8B LLM |
+| 特定領域術語（法律、醫療）           | 在領域語料上微調的模型                                                              |
+| 大規模即時、面向使用者的翻譯         | NMT；LLM 對同步 UX 來說太慢                                                         |
 
-![快速壓印機 vs 細心的謄寫員](https://res.cloudinary.com/iambigmomma/image/upload/v1782378353/blog/model-selection/fast_machine_vs_careful_scribe.png)
+在低資源與特定領域的語言配對上，一個微調過的 3.3B 專才仍然勝過通用的 7-8B 通才。AI 在地化最大的阻礙是信任，不是技術；後編輯（post-editing）流程之所以存在，是因為生產團隊還沒準備好在沒有人工把關的情況下直接發佈 LLM 的輸出，不管基準測試分數多高。
 
-_大量翻譯：NMT 是快速壓印機，LLM 是細心的謄寫員——比較慢，但更懂細膩之處。_
+#### 我們實測了什麼：五個模型、三種語言、一套評測框架
 
-LLM 則有不同的特性側寫：它們在長篇上下文、慣用語、低資源語言，以及語氣很重要、對品牌敏感的文案上勝出。[Lokalise 的盲測研究](https://lokalise.com/blog/what-is-the-best-llm-for-translation/)比較了五個引擎在英文 → 德文、波蘭文與俄文上的表現——由母語人士以成對比較方式評斷——發現 Claude 3.5 以 78% 拿下最高的「良好」評比，勝過 GPT-4o 以及所有三個受測的 NMT 引擎。
+為了替這套框架補上數字，我們在 [DigitalOcean Model Evaluations](https://docs.digitalocean.com/products/inference/how-to/evaluate-models/)（public preview）上跑了一次翻譯評測。設定是：50 題翻譯提示，涵蓋英譯德文、英譯繁體中文與英譯波蘭文，內容包含日常、正式、慣用語與技術類。每一題都附上人工撰寫的參考譯文。評審模型（Claude Opus 4.6）評 Ground Truth Faithfulness（GTF），以 0–1 的尺度衡量與參考譯文的語意等價程度。星號指標的通過門檻是 0.80。
 
-[Rapidata 走得更遠](https://huggingface.co/posts/jasoncorkill/521063845119914)：他們用超過 **51,000 名母語人士**的回饋，比較了 DeepL 與 DeepSeek-R1、Llama 及 Mixtral，該資料集現已在 Hugging Face 上公開。結論很微妙——在所有語言對與內容類型上，沒有任何一類能全面勝出。
+五個模型，同一份資料集、同一個評審、同一組 system prompt、`temperature=0`：
 
-2026 年在地化產業的共識：
+| 模型              | 輸入價格／百萬 token | GTF 平均  | 德文      | zh-TW     | 波蘭文    | 輸出 token（50 題） |
+| ----------------- | -------------------- | --------- | --------- | --------- | --------- | ------------------- |
+| DeepSeek V4 Flash | $0.112               | 0.781     | **0.825** | **0.794** | 0.720     | 1,367               |
+| Claude Sonnet 4.6 | $3.00                | **0.784** | 0.818     | 0.788     | **0.744** | 3,529               |
+| GLM-5.2           | $1.05                | 0.768     | 0.794     | 0.771     | 0.738     | 68,876              |
+| Qwen3-32B         | $0.25                | 0.710     | 0.747     | 0.724     | 0.653     | 43,006              |
+| Llama 3.3 70B     | $0.65                | 0.704     | 0.788     | 0.665     | 0.656     | 2,943               |
 
-| 使用情境                               | 建議做法                                       |
-| -------------------------------------- | ---------------------------------------------- |
-| 高流量、重複性的文件（合約、產品說明） | 以 DeepL 或 Google NMT 為主引擎                |
-| 行銷文案、品牌口吻、對語氣敏感的內容   | 用 LLM（Claude）做最終調整                     |
-| 低資源語言對                           | 微調後的 NLLB-200 3.3B 經常勝過通用的 7-8B LLM |
-| 特定領域術語（法律、醫療）             | 在領域語料上微調的模型                         |
-| 大規模即時、面向使用者的翻譯           | NMT；LLM 對同步 UX 來說太慢                    |
+DeepSeek V4 Flash 在品質上與 Sonnet 相當（GTF 0.781 對 0.784），輸入價格卻**低了 27 倍**，而且在德文與繁體中文上還略勝 Sonnet。它的輸出也最乾淨：總共 1,367 個 token，沒有任何前言贅詞。Sonnet 則在 50 題中有 14 題加上了「Here is the translation:」，即使指令已經明確要求不要這樣做。
 
-關鍵洞見：對低資源語言與特定領域的語言對而言，微調後的 [NLLB-200 3.3B](https://huggingface.co/facebook/nllb-200-3.3B)——一個 33 億參數的模型——仍然勝過通用的 7-8B LLM。較小的專才在自己的主場上擊敗了較大的通才。
+[GLM-5.2](https://ideas.digitalocean.com/changelog/now-available-glm-51-and-glm-52-from-zai) 的品質分數不錯（0.768），但生成了 **68,876 個輸出 token**，是 DeepSeek V4 Flash 的 50 倍。以每百萬輸出 token $4.40 計算，冗長度把輸入價格的優勢完全吃掉。Qwen3-32B 也有同樣的問題（43,006 個 token）。這正是本系列第一篇[為什麼你的 LLM 帳單是預期的 3 倍](/blog/zh-llm-bill-3x)所談的冗長度相乘因子的數字版：模型選型不只關乎每個 token 的費率，也關乎模型會產出多少 token。
 
-**AI 在地化的主要阻礙不是技術——而是信任。** 後編輯（post-editing）工作流程之所以存在，正是因為生產團隊還沒準備好在沒有人類查核點的情況下發布 LLM 的輸出，無論基準測試分數多高。評測方法必須把這一點納入考量：問題不只是「這個輸出分數高不高？」，而是「母語人士會不會在不經審查的情況下信任它？」
+波蘭文在五個模型中分數都最低（0.653–0.744，德文則是 0.747–0.825），與前面提到的低資源語言論點一致。
 
----
+其中一題把這道落差背後的失敗模式呈現得很清楚。原文：「Let's not beat around the bush, the project is behind schedule and we need to course-correct.」參考譯文：_Nie owijajmy w bawełnę, projekt jest opóźniony i musimy skorygować kurs._ Qwen3-32B（GTF 0.4）把這個慣用語譯成 _Nie kręćmy się w kółko_（「我們別繞圈子」，是另一個慣用語），並把「behind schedule」直譯成 _za harmonogramem_，而不是自然的 _opóźniony_。Claude Sonnet 4.6（GTF 0.8）則完全對上了慣用語與措辭，只在「course-correct」的改寫上有無傷大雅的偏離。較便宜的模型在字面與技術性文本上能過關，遇到慣用語就失手。
 
-### RAG 流程：評測完整的鏈路，而非孤立地評測模型
+資料集、system prompt 與原始結果檔[可在此取得](https://article-assets.fra1.cdn.digitaloceanspaces.com/model-selection/translation-eval-ground-truth.jsonl)以供重現。若要在你自己的提示上跑這套評測，請參考 DigitalOcean 文件中的 [How to Evaluate Models](https://docs.digitalocean.com/products/inference/how-to/evaluate-models/)。
 
-RAG（Retrieval-Augmented Generation，檢索增強生成）的評測，正是團隊最常犯下「只評測生成步驟」這個錯誤的地方。完整的流程有三個品質可能劣化的環節：
+### RAG 流程：評測整條鏈，而不是只評模型本身
 
-1. **嵌入品質**——檢索系統有沒有撈出正確的片段？
-2. **檢索精確度**——前 k 名的結果是否真的相關？
-3. **生成忠實度**——模型有沒有緊扣檢索到的上下文，還是它在產生幻覺？
+[RAG](https://www.digitalocean.com/community/tutorials/end-to-end-rag-pipeline) 評測最常失敗的原因，是團隊只評測生成這一步。整條流程有三個失敗點：
 
-第三個指標——忠實度（groundedness）——是 RAG 最主要的品質訊號。一個能準確摘要檢索上下文的模型很有價值；一個會自信地產出看似合理卻錯誤、且不在檢索上下文中的答案的模型則很危險，無論它的基準測試分數有多好。
+1. **Embedding 品質**：檢索系統有沒有撈出正確的片段？
+2. **檢索精準度**：top-k 的結果真的相關嗎？
+3. **生成忠實度**：模型有沒有緊守被檢索到的 context，還是產生幻覺？
 
-把評測 RAG 流程想成評測一位研究助理。你不只是測他能不能寫得清楚——你還要測他是否只引用你給他的文件裡實際存在的內容，而不會虛構出支持自己答案的來源。
+忠實度（groundedness）是最主要的品質訊號。一個會在檢索到的 context 之外、自信地產生「看似合理但其實錯誤」答案的模型，不管基準測試分數多好都很危險。
 
-**RAG 模型選型的實務做法：**
+RAG 的實務選型準則：
 
-- 把檢索品質（正確的內容有沒有回來？）與生成品質（答案是否忠實於回來的內容？）分開評測
-- 在你知道正確答案（ground truth）的保留樣本上，量測幻覺率
-- 對穩定上下文（系統提示 + RAG 模板）做提示快取，是最主要的成本槓桿——一個快取做得好的 RAG 流程，會有 70-80% 的輸入 token 從快取供應，價格只要基礎輸入價的 10%。模型與提示結構要同時選定；你無法把快取硬塞進一個結構糟糕的提示裡。
+- 分開評測檢索與生成
+- 在已知正確答案的保留樣本上量測幻覺率
+- 對穩定 context（system prompt + RAG 樣板）做 prompt caching 是最主要的成本槓桿：一條快取良好的 RAG 流程，有 70-80% 的輸入 token 由快取供應，價格只要[基礎輸入價的 10%](https://docs.anthropic.com/en/docs/about-claude/pricing#prompt-caching)。從一開始就把提示結構設計成可快取；事後補救很貴。
 
-對大多數 RAG 使用情境來說，中階模型（Claude Sonnet、GPT-4o mini）的表現，會優於外界預期的、與前沿模型之間的品質落差，因為只要提示得當，忠實度是一種可控的行為——它不需要最頂級的模型智慧。把評測時間花在量測忠實度上，而不是去跑原始智慧的基準測試。
+對大多數 RAG 來說，中階模型（Claude Sonnet、GPT-4o mini）能把與前沿模型之間的品質差距補上，因為忠實度是可以靠好的提示控制的行為，並不需要最高的模型智能。只有在調完提示後忠實度仍然過不了你的評測時，才升級到前沿模型。
 
----
+### 程式碼生成：私有程式碼庫的表現一定低於基準測試
 
-### 程式碼生成：為什麼私有程式碼庫的表現總是不如基準測試
+標準的基準是 SWE-bench，篩選階段特別是 SWE-bench Verified（500 個經人工驗證的 Python 任務），而愈來愈多人用 [SWE-bench Pro](https://labs.scale.com/leaderboard/swe_bench_pro_public) 取得更難的訊號。
 
-程式碼生成代理（agent）的標竿基準測試是 SWE-bench——具體來說是用 SWE-bench Verified（500 個經人工驗證的 Python 任務）做初步篩選，並且越來越常用 SWE-bench Pro 取得更難的訊號。
+#### SWE-bench Verified 有資料污染問題
 
-以下是重要的背景：
+[OpenAI 在 2026 年 2 月停止以它作為回報依據](https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/)，原因是稽核發現部分基準任務的解法可以從 issue 內文外洩，而且在大多數受測案例中，模型會從訓練資料回想起檔案路徑與 release note 的細節。頂尖模型在 Verified 上拿 70% 以上。在 Scale AI 推出的抗污染替代基準 SWE-bench Pro 上，頂尖模型大約只有 **23%**。
 
-**SWE-bench Verified 有污染問題。** OpenAI 在 2026 年 2 月停止以它作為對照回報，因為稽核發現許多基準任務的解答可以從議題文字（issue text）洩漏出來，而且模型高達 76% 的時候會從訓練資料中回想起檔案路徑。頂尖模型在 Verified 上得分 70% 以上。但在 SWE-bench Pro——一個由 Scale AI 打造、抗污染的替代測試集——上，頂尖模型大約只得 **23%**。這個落差告訴你一件重要的事：排行榜實際上在衡量什麼。
+![Bar chart: ~70% on SWE-bench Verified versus ~23% on SWE-bench Pro](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Chosing%20the%20right%20model%20for%20your%20Inference%20use%20case/swebench_verified_vs_pro.png)
 
-![長條圖：頂尖模型在 SWE-bench Verified 約 70%、在 Pro 約 23%](https://res.cloudinary.com/iambigmomma/image/upload/v1782378407/blog/model-selection/swebench_verified_vs_pro.png)
+_相同的任務領域，不同的基準測試：抗污染的那一組講的是完全不同的故事。_
 
-_同樣的任務、不同的基準測試：抗污染的測試集說的是完全不同的故事。_
+#### 你的程式碼庫才是唯一誠實的基準
 
-這個比喻是：一個學生在去年的考試考了 95%。非常厲害——直到你發現他是把答案卷背了下來。用新教材考他，數字看起來就會非常不同。
+在 SWE-bench 上表現好的模型，是在有常見模式的公開 Python repository 上表現好。你的私有程式碼庫有不同的慣例、抽象層與測試結構。表現一定會更低；問題在於低多少，而且各家模型差異很大。
 
-對程式碼生成而言，唯一具權威性的訊號，是在你實際的程式碼庫上做評測。在 SWE-bench 上表現好的模型，是在有著常見模式的公開 Python 儲存庫上表現好。你的私有程式碼庫有不同的慣例、不同的抽象、不同的測試結構。表現總是會比基準測試低——問題在於低多少，而答案在不同模型之間差異甚大。
+程式碼生成的實務選型：
 
-**程式碼生成模型選型的實務做法：**
+- 用 SWE-bench Verified 與 Pro 當篩選過濾器，先淘汰表現差的
+- 跑一套私有的評測框架：從你程式碼庫取出的代表性任務，並附上已知的正確解法
+- 納入 [LiveCodeBench](https://livecodebench.github.io/)：題目在模型訓練截止日之後才發布，讓污染在結構上難以發生
+- 針對你最主要的語言與框架來量測
 
-- 用 SWE-bench Verified 與 [SWE-bench Pro](https://labs.scale.com/leaderboard/swe_bench_pro_public) 作為初步篩選的過濾器，淘汰明顯表現差的選項
-- 對於生產決策，跑一套私有的評測框架：一組來自你自己程式碼庫、且已知正確解答的代表性任務
-- [LiveCodeBench](https://livecodebench.github.io/) 值得納入——它使用模型訓練截止日之後才發布的題目，使污染在結構上難以發生
-- 特別要在你最主要的語言與框架上量測。一個為 Python 最佳化的模型，在一個有著複雜匯入關係的 monorepo 裡的 TypeScript 上，可能會有不同的表現。
+複雜的跨檔案修改用前沿模型。範圍明確的編輯、測試生成與樣板程式碼，中階模型通常就能以一小部分的成本過關。
 
----
+### 客戶支援：TTFT 主導使用者體驗
 
-### 客戶支援與聊天機器人：TTFT 是你最主要的 UX 指標
+在面向客戶的對話場景，模型品質的爭論其次於 **Time to First Token（TTFT）**，也就是從送出請求到收到回應第一個字元之間的延遲。
 
-對面向客戶的對話應用來說，模型品質的爭論往往次要於一個不會出現在任何基準測試排行榜上的指標：**首字延遲（TTFT，Time to First Token）**——從送出請求到收到回應第一個字元之間的延遲。
+使用者會把 500ms 的 TTFT 感受為「即時」，把 2 秒的 TTFT 感受為「慢」。在速度可接受之前，回應的內容幾乎不會被注意到。
 
-這個比喻是：一家餐廳，服務生立刻就應答你的點餐，對比另一家服務生消失了 30 秒才回來。餐點本身可能一模一樣，但前 30 秒的體驗，塑造了你對整段互動的觀感。使用者把 500 毫秒的 TTFT 感受為「即時」，把 2 秒的 TTFT 感受為「很慢」。在速度可被接受之前，回應的內容幾乎無關緊要。
+我們在 [DigitalOcean Serverless Inference](https://docs.digitalocean.com/products/inference/details/pricing/)（`inference.do-ai.run`，2026 年 7 月，每個模型跑 3 次，取中位數）上，用一個客服工單分類提示量測了四個模型的 TTFB（time to first byte，TTFT 的代理指標）：
 
-這對支援應用的模型選型有以下意涵：
+| 模型              | TTFB 中位數 | 輸入價格／百萬 token | 對比 Sonnet        |
+| ----------------- | ----------- | -------------------- | ------------------ |
+| Llama 3.3 70B     | **389ms**   | $0.65                | 快 3.6 倍、便宜 4.6 倍 |
+| Claude Haiku 4.5  | 655ms       | $1.00                | 快 2.2 倍、便宜 3 倍   |
+| Qwen3-32B         | 1,040ms     | $0.25                | 快 1.4 倍、便宜 12 倍  |
+| Claude Sonnet 4.6 | 1,416ms     | $3.00                | 基準                 |
 
-- 較小、較快的模型往往帶來更好的使用者體驗，即使它們量測到的輸出品質略低——因為 UX 是由 TTFT 主導的
-- 對重複出現的 FAQ 式查詢做語意快取與提示快取，是最主要的成本最佳化——同樣的問題在支援情境中會出現數百次；對穩定上下文做快取能大幅降低每次查詢的成本
-- 串流輸出很重要：一個在 300 毫秒內串流出第一個 token 的模型，感覺比另一個在 1.5 秒後才交出完整回應的模型更快，即使兩者的總完成時間相同
+每個模型只跑 3 次，對一個這麼容易受網路抖動與時段負載影響的指標來說是很薄的樣本。請把這些倍數當成方向性參考，而不是定論。Llama 3.3 70B 在每百萬輸入 token $0.65 的價格下做到 400ms 以內的 TTFB，比 Sonnet 快 3.6 倍、便宜 4.6 倍。對一個使用者正盯著游標看的客服聊天機器人來說，這同時是更好的 UX 與更低的成本。Sonnet 的 1.4 秒 TTFB 已經接近使用者會感受到延遲的門檻。
 
-對於分類式的支援任務（意圖路由、升級偵測、情緒標記），準確度下限通常用比前沿模型小得多、也便宜得多的模型就能達到。把每一張支援工單都送進 Claude Opus 做意圖分類，就像拿大鐵鎚去掛一個相框。
+意涵：
 
-![殺雞用牛刀：用遠超任務所需的模型](https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExczBxNm94OGtpbWZmczBibjZsN2RjejMzMWF2ODdzMXV2ODNneWQ0MSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/2NQod5LYtwDZe/giphy.gif)
+- 更小、更快的模型即使輸出品質略低，仍能帶來更好的 UX，因為體驗是由 TTFT 主導
+- 對重複出現的 FAQ 類查詢做語意快取與 prompt caching 是最主要的成本最佳化：同樣的問題會出現上百次，把穩定 context 快取起來能大幅降低每次查詢的成本
+- 串流很重要：300ms 就吐出第一個 token，感覺比 1.5 秒後一次給完整回應更快，即使總完成時間相同
 
----
+對分類型的支援任務（意圖路由、升級判斷、情緒標記），準確度下限用比前沿模型小很多、也便宜很多的模型就能達到。
 
-### 基準測試陷阱：數字沒告訴你的事
+### 基準測試是篩選用的過濾器，不是最終判決
 
-在根據公開基準測試決定採用某個模型之前，有四個值得內化的注意事項：
+在依據公開基準測試決定用哪個模型之前，有四點提醒：
 
-**1. MMLU 已經飽和。** 最先進的模型在 MMLU 上的準確度都擠在 2–4% 的範圍內，使它幾乎無法用來區分當前的前沿模型。它是一道下限測試，不是區分器。
+**MMLU 已經飽和。** 最先進的模型彼此集中在 2-4% 的準確度區間內，幾乎無法用來區分目前的前沿模型。
 
-**2. 同一個模型，在不同框架下分數不同。** 兩個團隊用不同的提示格式、少樣本（few-shot）範例與答案擷取邏輯，在同一個任務上跑同一個模型，回報的分數可能相差 10–15%。評測方法本身就是結果的一部分。當你看到一個基準測試數字時，要問：「是誰跑的，用什麼提示設定？」
+**同一個模型，在不同評測框架下分數不同。** 兩個團隊用不同的提示格式與答案擷取邏輯跑同一個模型，回報的分數可能相差 10-15%。評測方法本身就是結果的一部分。
 
-**3. SWE-bench 污染。** SWE-bench Verified（頂尖模型 70% 以上）與 SWE-bench Pro（頂尖模型 23%）之間的落差，說明了污染會多麼劇烈地灌水分數。你讀的是哪一個基準測試，排行榜的排名可能看起來非常不同。
+**SWE-bench 的污染問題。** Verified（70% 以上）與 Pro（23%）之間的落差，說明了污染會把分數灌水到什麼程度。
 
-![公開的 SWE-bench 模型分數排行榜](https://res.cloudinary.com/iambigmomma/image/upload/v1782378291/blog/model-selection/SWE_bench.png)
+![A public SWE-bench leaderboard of model scores](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Chosing%20the%20right%20model%20for%20your%20Inference%20use%20case/SWE_bench.png)
 
-_一個公開的 SWE-bench 排行榜。把排名當成方向性參考——同一個模型在不同評測框架下分數可能不同。_
+_一份公開的 SWE-bench 排行榜。請把排名當成方向性參考；同一個模型在不同評測框架下分數會不一樣。_
 
-**4. 你的資料才是唯一具權威性的訊號。** 每一個基準測試都是用別人的分布建出來的。你的使用情境有不同的分布——不同的領域詞彙、不同的使用者查詢模式、不同的文件結構。一個在公開基準測試上排第二的模型，在你的特定任務上可能勝過排名第一的模型。要知道答案，唯一的方法就是在你自己的資料上做評測。
+**你自己的資料才是唯一具權威性的訊號。** 每一份基準測試都建立在別人的分布上。在公開基準上排名第二的模型，在你的特定任務上可能勝過排名第一的那個。唯一能確認的方法，就是用你自己的資料去評測。
 
----
+### 一套可重複的模型選型流程
 
-### Model Advisor 的做法
+以下就是你可以用來為推論使用情境挑選正確模型的可重複流程：
 
-當我與工程團隊一起做模型選型時，我使用的框架是這樣的：
+1. **定義你的準確度下限**：實際的最低門檻，不是理想值
+2. **挑選你的評測指標**：翻譯用 COMET、RAG 用忠實度、程式碼用你自己框架的通過率、支援場景用 TTFT 加任務準確度
+3. **由小到大依序評測**：從最便宜可行的模型開始，一路往上直到跨過你的下限
+4. **設定重新評估的節奏**：模型分級演進得很快
 
-1. **定義你的準確度下限**——不是理想中的，而是實際的最低門檻
-2. **挑選你的評測指標**——翻譯用 COMET；RAG 用忠實度（groundedness）；程式碼用你自己評測框架上的通過率；支援則用 TTFT + 任務準確度
-3. **由小到大評測**——從最便宜的可行模型開始，往上試，直到跨過你的下限
-4. **設定重新評測的節奏**——模型層級演進得很快；六個月前需要 Sonnet 的任務，現在用 Haiku 可能就能達成
+產出是一張決策矩陣：A 類任務用模型 X、B 類任務用模型 Y，並在信心不足時升級到模型 Z。
 
-產出的是一個專屬於你使用情境的決策矩陣——不是「用模型 X」，而是「A 類型的任務用模型 X、B 類型的任務用模型 Y，並在信心度低時用升級邏輯轉給模型 Z」。
+[DigitalOcean 的 Inference Router](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/) 把這件事自動化：依任務複雜度把請求路由到不同層級的模型，不需要自己維護路由邏輯。決策矩陣變成設定檔，而不是程式碼。[Multi-Model API Cost Governance](https://www.digitalocean.com/community/tutorials/inference-router-multi-model-api-cost-governance) 在 2026 年 6 月的實跑中，於混合分類／問答／推理的流量配比下，純靠路由、不改提示也不換模型，量到**相對於只用 Sonnet 降低 39.6% 成本**、**相對於只用 Opus 降低 63.7%**。更深入的架構故事會在本系列的下一篇談。
 
-這正是 [DigitalOcean 的 Inference Router](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/) 所自動化的：根據任務複雜度，在不同模型層級之間路由請求，而不需要你維護自訂的路由邏輯。決策矩陣變成了設定，而非程式碼。多供應商與多模型路由背後更深層的架構故事，會在本系列的第 5 篇文章中涵蓋。
-
----
-
-### 總結
-
-模型選型不是一次性的決定——它是一個流程。關鍵原則：
-
-- **先建立你的準確度下限**，然後找出能跨過它的最便宜模型——而不是反過來做
-- 針對你的任務類型**使用正確的評測指標**：翻譯用 COMET（不是 BLEU）、RAG 用忠實度、程式碼用私有框架上的表現、面向客戶的對話用 TTFT
-- **基準測試是篩選用的過濾器，不是最終判決**——MMLU 已飽和、SWE-bench 有污染問題，而同一個模型在不同評測框架下分數相差 10–15%
-- **你自己的資料才是唯一具權威性的訊號**——每一個公開基準測試都是用別人的分布建出來的
-- **較小的專才在自己的主場上擊敗較大的通才**——低資源翻譯用微調後的 NLLB-200 3.3B、FAQ 分類用一個提示得當的 Haiku
-
-那個貴的模型很少是正確答案。正確答案是能可靠地跨過你準確度下限的最小模型——在你的資料上、你的任務上、用你的指標評測出來的那一個。
+如果你還沒讀過，請先看本系列第一篇[為什麼你的 LLM 帳單是預期的 3 倍](/blog/zh-llm-bill-3x)，了解模型選型的成本意涵。
 
 ### 參考資料
 
-- [What is the best LLM for translation?](https://lokalise.com/blog/what-is-the-best-llm-for-translation/) — Lokalise
-- [Rapidata Translation Benchmark: DeepL vs DeepSeek-R1/Llama/Mixtral](https://huggingface.co/posts/jasoncorkill/521063845119914) — HuggingFace
-- [NLLB-200 3.3B Model](https://huggingface.co/facebook/nllb-200-3.3B) — Meta / HuggingFace
-- [SWE-bench Pro Leaderboard](https://labs.scale.com/leaderboard/swe_bench_pro_public) — Scale AI
-- [SWE-bench Verified Leaderboard 2026](https://leaderboard.steel.dev/leaderboards/swe-bench-verified/) — Steel.dev
-- [AI Translation Companies in 2026: Vendor Comparison](https://www.forasoft.com/blog/article/ai-translation-companies) — Forasoft
+- [How to Evaluate Models](https://docs.digitalocean.com/products/inference/how-to/evaluate-models/)（DigitalOcean Model Evaluations，翻譯評測方法）
+- [Multi-Model API Cost Governance with the Inference Router](https://www.digitalocean.com/community/tutorials/inference-router-multi-model-api-cost-governance)（DigitalOcean，2026 年 6 月實跑）
+- [Model Evaluations: Prove Your Routing Policy Actually Works](https://www.digitalocean.com/blog/model-evaluation-public-preview)（DigitalOcean）
+- [What is the best LLM for translation?](https://lokalise.com/blog/what-is-the-best-llm-for-translation/)（Lokalise）
+- [Rapidata Translation Benchmark: DeepL vs DeepSeek-R1/Llama/Mixtral](https://huggingface.co/posts/jasoncorkill/521063845119914)（HuggingFace）
+- [NLLB-200 3.3B Model](https://huggingface.co/facebook/nllb-200-3.3B)（Meta／HuggingFace）
+- [SWE-bench Pro Leaderboard](https://labs.scale.com/leaderboard/swe_bench_pro_public)（Scale AI）
+- [Why SWE-bench Verified No Longer Measures Frontier Coding Capabilities](https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/)（OpenAI，2026 年 2 月）
+- [LiveCodeBench](https://livecodebench.github.io/)（抗污染的程式碼基準測試）
+- [Anthropic API Pricing](https://docs.anthropic.com/en/docs/about-claude/pricing)
+- [DigitalOcean Inference Pricing](https://docs.digitalocean.com/products/inference/details/pricing/)
+- [How to Use Inference Router](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/)（DigitalOcean 文件）
+
+---
+
+_這是「生產環境中的 LLM 推論」系列 5 篇文章中的第 2 篇。[第 1 篇](/blog/zh-llm-bill-3x)談推論帳單背後隱藏的成本相乘因子。[第 3 篇](/blog/zh-prompt-caching)談 prompt caching 的實務。[第 4 篇](/blog/zh-multi-provider-routing)談多供應商路由架構。[第 5 篇](/blog/zh-full-stack-ai-tco)檢視整套 AI stack 的總持有成本。_

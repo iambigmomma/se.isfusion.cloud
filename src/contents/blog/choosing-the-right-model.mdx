@@ -1,209 +1,210 @@
 ---
-title: 'Choosing the Right Model for Your Use Case — A Practical Guide'
+title: 'Choosing the Right Model for Your Inference Use Case'
 description: "Model selection — not hardware — is the single biggest lever on GenAI spend. Benchmarks are screening filters, not verdicts. Here's the evaluation methodology that actually works in production, with deep dives into translation, RAG, code generation, and customer support."
 banner: 'choosing-the-right-model-banner'
-publishedAt: '2026-06-12'
+publishedAt: '2026-07-08'
 tags: 'ai-ml,gen-ai,llm,model-evaluation'
 ---
 
 > _Disclosure: I'm a Solutions Architect at DigitalOcean, so when I mention DigitalOcean products it's an informed-insider view, not a neutral one — I flag those moments clearly and keep the analysis vendor-neutral wherever the topic allows. The opinions here are my own._
 
-### Introduction
+_A version of this article was published on the [DigitalOcean Community](https://www.digitalocean.com/community/tutorials/how-to-choose-llm-model-for-inference)._
 
-A common pattern among engineering teams new to production LLM work: they pick a model from the top of a leaderboard, integrate it, and then spend the next several months trying to reduce the bill. The sequence is backwards.
+_A repeatable method for choosing inference models by evaluating on your own data, with first-hand cost figures from DigitalOcean serverless. The method is provider-agnostic; DigitalOcean specific numbers are cited to source._
 
-Model selection — not infrastructure, not prompt optimization, not batching strategy — is the single biggest lever on both quality and cost in a GenAI deployment. The difference between Claude Sonnet 4.6 and Claude Haiku 4.5 on a simple classification task is roughly 12× in price. If Haiku produces equivalent quality for your specific task, every day you spend on Sonnet is 12× overpayment.
+### Model choice moves cost by orders of magnitude
 
-The challenge is that most teams pick models the wrong way: they look at benchmark leaderboards, identify the highest scorer, and ship it. This article explains why that produces suboptimal results — and what the right evaluation process actually looks like, illustrated through four distinct use case categories.
+Model selection, not infrastructure, not prompt optimization, not batching strategy is the single biggest lever on both quality and cost in a GenAI deployment. [Claude Sonnet 4.6](https://docs.anthropic.com/en/docs/about-claude/pricing) lists $3.00/M input; [Claude Haiku 4.5](https://docs.anthropic.com/en/docs/about-claude/pricing) lists $1.00/M: a 3× spread on a simple classification task. Against a capable open-weight model on [DigitalOcean Serverless Inference](https://docs.digitalocean.com/products/inference/details/pricing/), that gap widens to 36× on identical token shapes (measured in [Multi-Model API Cost Governance with the Inference Router](https://www.digitalocean.com/community/tutorials/inference-router-multi-model-api-cost-governance), June 2026).
 
-### Key Takeaways
+These are two separate comparisons, not one escalating figure: the 3× spread is within Anthropic's own lineup, and the 36× figure is a distinct, separately measured comparison against an open-weight model on DO Serverless. Keep them separate if you cite either number on its own elsewhere.
 
-- Model selection — not hardware — is the single biggest lever on both GenAI cost and quality.
-- Establish your accuracy floor first, then pick the _smallest_ model that clears it — not the top of the leaderboard.
-- Use the right metric per task: COMET (not BLEU) for translation, faithfulness/groundedness for RAG, a private harness for code, TTFT for customer-facing chat.
-- Benchmarks are screening filters, not verdicts: MMLU is saturated, SWE-bench Verified is contamination-prone (~70% vs ~23% on the harder Pro set), and the same model can score 10–15% differently across evaluation harnesses.
-- Your own data is the only authoritative signal — and smaller specialists routinely beat larger generalists on their home turf.
+If the smaller model produces equivalent quality for your specific task, every day on the bigger model is overpayment, not by percentages, but by multiples.
 
----
+> **Pricing note:** Token rates reflect June 2026 list prices from provider docs and [DigitalOcean Inference pricing](https://docs.digitalocean.com/products/inference/details/pricing/). Confirm live rates before you budget. Model lineups also move fast; confirm whether a newer flagship release has superseded the models referenced here before quoting this comparison.
 
-### The Selection Framework: Accuracy Floor First, Then Cost
+### The selection framework: accuracy floor first, then cost
 
-The correct mental model for model selection is not "find the best model" — it's **"find the accuracy floor for your task, then find the smallest model that clears it."**
+The correct sequence is **"find the accuracy floor for your task, then find the smallest model that clears it."**
 
-Think of it like hiring a contractor. You don't hire a structural engineer to repaint a room — you hire the person with the skills appropriate to the job. If your task requires nuanced tone in marketing copy, you probably need the senior engineer. If it requires extracting a date from a document, the junior hire who's 80% cheaper will do fine. The mistake isn't always hiring the wrong person — it's hiring the expensive one without checking whether the cheaper one would do.
-
-![A sieve sorting differently-sized models against an accuracy floor](https://res.cloudinary.com/iambigmomma/image/upload/v1782378355/blog/model-selection/accuracy_floor.png)
+![A sieve sorting differently-sized models against an accuracy floor](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Chosing%20the%20right%20model%20for%20your%20Inference%20use%20case/accuracy_floor.png)
 
 _Pour the candidates through your accuracy floor; keep the smallest model that clears it._
 
-The process works like this:
+1. **Define your accuracy floor**: the minimum acceptable performance on the metrics that matter. Not "as good as possible," but the threshold below which the product breaks.
+2. **Evaluate on your own data**: representative samples from your production distribution, not the benchmark's.
+3. **Start small, work up**: models that pass your eval are candidates; the cheapest candidate wins.
+4. **Revisit when models update**: what required Sonnet 6 months ago may now be achievable with Haiku.
 
-1. **Define your accuracy floor** — what's the minimum acceptable performance on the specific metrics that matter for your use case? Not "as good as possible," but the actual threshold below which the product breaks.
-2. **Run evaluation on your own data** — use representative samples from your production distribution, not the benchmark's distribution.
-3. **Find the smallest model that clears your floor** — start small and work up. Models that pass your eval are candidates; the cheapest candidate wins.
-4. **Revisit when models update** — provider model releases happen frequently. The cheapest model that cleared your floor six months ago might have been leapfrogged by a new tier.
+### Translation: use COMET not BLEU, and NMT not an LLM for bulk
 
-Every point in this article applies that same logic to four specific use case categories.
+Translation exposes a fundamental evaluation flaw: **the metrics that are easy to compute often don't measure what matters.**
 
----
+#### BLEU correlates poorly with human judgment
 
-### Translation: A Case Study in Metric Mismatch
+[BLEU(bilingual evaluation understudy)](https://www.digitalocean.com/community/tutorials/automated-metrics-for-evaluating-generated-text) counts n-gram overlaps between model output and a reference translation. It's fast and deterministic. It's also a poor predictor of quality for anything requiring nuance.
 
-Translation is a useful case study because it exposes a fundamental flaw in how many teams evaluate LLMs: **the metrics that are easy to compute often don't measure what actually matters.**
+COMET (Crosslingual Optimized Metric for Evaluation of Translation) is a neural metric trained on human judgments. It correlates substantially better with how native speakers evaluate quality and can invert BLEU rankings. A model scoring higher on BLEU sometimes scores lower on COMET.
 
-#### BLEU vs. COMET: Why the Standard Metric Lies
+For any serious translation evaluation, COMET should be the primary metric. BLEU is a sanity check.
 
-BLEU — the traditional machine translation metric — counts n-gram overlaps between the model's output and a reference translation. It's fast, deterministic, and easy to compute. It's also a poor predictor of quality for anything that requires nuance.
+#### NMT wins on bulk; LLMs win on nuance
 
-Think of BLEU as evaluating a poem by counting how many rhymes it has. A poem that rhymes perfectly but says nothing interesting scores well. A poem that captures an emotion you've never seen expressed before but breaks the rhyme scheme scores poorly. The metric optimizes for the wrong thing.
+For high-volume translation, the speed gap is decisive. Google's NMT engine delivers results in milliseconds, up to **20× faster** than LLMs. DeepL performs comparably at high throughput.
 
-COMET (Crosslingual Optimized Metric for Evaluation of Translation) is a neural metric trained on human judgments. It correlates much better with how actual human readers evaluate translation quality — and critically, it can invert BLEU rankings. A model that scores higher on BLEU sometimes scores lower on COMET, because human quality isn't about n-gram overlap.
+![A fast stamping machine beside a careful quill-and-ink scribe](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Chosing%20the%20right%20model%20for%20your%20Inference%20use%20case/fast_machine_vs_careful_scribe.png)
 
-For any serious translation evaluation, COMET should be your primary metric, with BLEU kept only as a sanity check.
+_Bulk translation: NMT is the stamping press; an LLM is the careful scribe, slower but better with nuance._
 
-#### DeepL vs. LLMs: Speed Is the Deciding Variable for Bulk Work
+LLMs win on long-form context, idioms, low-resource languages, and brand-sensitive copy. [Lokalise's blind study](https://lokalise.com/blog/what-is-the-best-llm-for-translation/) compared five engines across EN→DE/PL/RU with native-speaker pairwise comparison and found Claude 3.5 at the highest "good" rating (78%). [Rapidata's dataset](https://huggingface.co/posts/jasoncorkill/521063845119914) (DeepL versus DeepSeek-R1/Llama/Mixtral, **51,000+ native speakers**, publicly available on Hugging Face) found neither category dominates across all language pairs and content types.
 
-For high-volume translation, the speed gap between DeepL and LLMs is decisive. Google's Neural Machine Translation engine delivers results in milliseconds — up to **20× faster** than LLMs. DeepL performs comparably at high throughput. For bulk document translation pipelines where you're processing thousands of segments per hour, that speed difference translates directly to infrastructure cost.
+| Use case                                            | Recommended approach                                                                                          |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| High-volume, repetitive documents                   | DeepL or Google NMT as primary engine                                                                         |
+| Marketing copy, brand voice, tone-sensitive content | LLM (Claude) for final adaptation                                                                             |
+| Low-resource language pairs                         | Fine-tuned [NLLB-200 3.3B](https://huggingface.co/facebook/nllb-200-3.3B) often outperforms generic 7-8B LLMs |
+| Domain-specific terminology (legal, medical)        | Fine-tuned model on domain corpus                                                                             |
+| Real-time user-facing translation at scale          | NMT; LLMs too slow for synchronous UX                                                                         |
 
-![A fast stamping machine beside a careful quill-and-ink scribe](https://res.cloudinary.com/iambigmomma/image/upload/v1782378353/blog/model-selection/fast_machine_vs_careful_scribe.png)
+For low-resource and domain-specific pairs, a fine-tuned 3.3B specialist still outperforms a generic 7-8B generalist. The main blocker in AI localization is trust, not technology; post-editing workflows exist because production teams aren't ready to publish LLM output without a human checkpoint, regardless of benchmark scores.
 
-_Bulk translation: NMT is the fast stamping press; an LLM is the careful scribe — slower, but better with nuance._
+#### What we measured: five models, three languages, one eval harness
 
-LLMs have a different profile: they win on long-form context, idioms, low-resource languages, and brand-sensitive copy where tone matters. [Lokalise's blind study](https://lokalise.com/blog/what-is-the-best-llm-for-translation/) comparing five engines across English→German, Polish, and Russian — evaluated by native speakers using pairwise comparison — found Claude 3.5 achieving the highest "good" rating at 78%, outperforming both GPT-4o and all three NMT engines tested.
+To put numbers behind the framework, we ran a translation evaluation on [DigitalOcean Model Evaluations](https://docs.digitalocean.com/products/inference/how-to/evaluate-models/) (public preview). The setup: 50 translation prompts across English→German, English→Traditional Chinese, and English→Polish, covering everyday, formal, idiomatic, and technical content. Each prompt includes a human-written reference translation. The judge (Claude Opus 4.6) scores Ground Truth Faithfulness (GTF), measuring semantic equivalence to the reference on a 0–1 scale. Star metric pass threshold: 0.80.
 
-[Rapidata went further](https://huggingface.co/posts/jasoncorkill/521063845119914): they ran a comparison of DeepL versus DeepSeek-R1, Llama, and Mixtral using feedback from over **51,000 native speakers**, with the dataset now publicly available on Hugging Face. The conclusion was nuanced — neither category dominates across all language pairs and content types.
+Five models, same dataset, same judge, same system prompt, `temperature=0`:
 
-The 2026 consensus in the localization industry:
+| Model             | Input price/M | GTF avg   | German    | zh-TW     | Polish    | Output tokens (50 prompts) |
+| ----------------- | ------------- | --------- | --------- | --------- | --------- | -------------------------- |
+| DeepSeek V4 Flash | $0.112        | 0.781     | **0.825** | **0.794** | 0.720     | 1,367                      |
+| Claude Sonnet 4.6 | $3.00         | **0.784** | 0.818     | 0.788     | **0.744** | 3,529                      |
+| GLM-5.2           | $1.05         | 0.768     | 0.794     | 0.771     | 0.738     | 68,876                     |
+| Qwen3-32B         | $0.25         | 0.710     | 0.747     | 0.724     | 0.653     | 43,006                     |
+| Llama 3.3 70B     | $0.65         | 0.704     | 0.788     | 0.665     | 0.656     | 2,943                      |
 
-| Use Case                                                            | Recommended Approach                                         |
-| ------------------------------------------------------------------- | ------------------------------------------------------------ |
-| High-volume, repetitive documents (contracts, product descriptions) | DeepL or Google NMT as primary engine                        |
-| Marketing copy, brand voice, tone-sensitive content                 | LLM (Claude) for final adaptation                            |
-| Low-resource language pairs                                         | Fine-tuned NLLB-200 3.3B often outperforms generic 7-8B LLMs |
-| Domain-specific terminology (legal, medical)                        | Fine-tuned model on domain corpus                            |
-| Real-time user-facing translation at scale                          | NMT; LLMs too slow for synchronous UX                        |
+DeepSeek V4 Flash matches Sonnet's quality (GTF 0.781 vs 0.784) at **27× lower input price**, and slightly outscores Sonnet on German and Traditional Chinese. It also produces the cleanest output: 1,367 tokens total, zero preamble. Sonnet added "Here is the translation:" on 14 of 50 prompts despite explicit instructions not to.
 
-The critical insight: for low-resource languages and domain-specific pairs, fine-tuned [NLLB-200 3.3B](https://huggingface.co/facebook/nllb-200-3.3B) — a 3.3 billion parameter model — still outperforms generic 7-8B LLMs. A smaller specialist beats a larger generalist on their home turf.
+[GLM-5.2](https://ideas.digitalocean.com/changelog/now-available-glm-51-and-glm-52-from-zai) scores well on quality (0.768) but generated **68,876 output tokens** which is 50× more than DeepSeek V4 Flash. At $4.40/M output, verbosity erases the input-price advantage. Qwen3-32B has the same problem (43,006 tokens). This is the verbosity multiplier from the first article in this series on [Why Your LLM Bill Is 3× What You Expected](/blog/llm-bill-3x) in numeric form: model selection is not just about per-token rate, it's about how many tokens the model produces.
 
-**The main blocker in AI localization is not technology — it's trust.** Post-editing workflows exist precisely because production teams aren't yet ready to publish LLM output without a human checkpoint, regardless of benchmark scores. The evaluation methodology has to account for this: it's not just "does this output score well?" but "would a native speaker trust this without review?"
+Polish scores lowest across all five models (0.653–0.744 vs 0.747–0.825 for German), consistent with the low-resource language thesis above.
 
----
+One prompt shows the failure mode behind that gap. Source: "Let's not beat around the bush, the project is behind schedule and we need to course-correct." Reference: _Nie owijajmy w bawełnę, projekt jest opóźniony i musimy skorygować kurs._ Qwen3-32B (GTF 0.4) rendered the idiom as _Nie kręćmy się w kółko_ ("let's not go in circles", a different idiom) and translated "behind schedule" literally as _za harmonogramem_ instead of the natural _opóźniony_. Claude Sonnet 4.6 (GTF 0.8) matched the idiom and phrasing exactly, deviating only on a harmless paraphrase of "course-correct." Cheaper models clear the bar on literal and technical text, then miss on idiom.
 
-### RAG Pipelines: Evaluate the Full Chain, Not the Model in Isolation
+The dataset, system prompt, and raw result files are [available here](https://article-assets.fra1.cdn.digitaloceanspaces.com/model-selection/translation-eval-ground-truth.jsonl) for reproducibility. To run this evaluation on your own prompts refer to [How to Evaluate Models](https://docs.digitalocean.com/products/inference/how-to/evaluate-models/) in the DigitalOcean Documentation.
 
-RAG (Retrieval-Augmented Generation) evaluation is where teams most often make the mistake of evaluating only the generation step. The full pipeline has three places where quality can degrade:
+### RAG pipelines: evaluate the full chain, not the model alone
 
-1. **Embedding quality** — does the retrieval system surface the right chunks?
-2. **Retrieval precision** — are the top-k results actually relevant?
-3. **Generation faithfulness** — does the model stick to the retrieved context, or does it hallucinate?
+[RAG](https://www.digitalocean.com/community/tutorials/end-to-end-rag-pipeline) evaluation fails most often because teams evaluate only the generation step. The pipeline has three failure points:
 
-The third metric — faithfulness, also called groundedness — is the dominant quality signal for RAG. A model that summarizes retrieved context accurately is valuable. A model that confidently generates plausible-but-wrong answers that aren't in the retrieved context is dangerous, regardless of how good its benchmark scores are.
+1. **Embedding quality**: does the retrieval system surface the right chunks?
+2. **Retrieval precision**: are the top-k results actually relevant?
+3. **Generation faithfulness**: does the model stick to retrieved context, or hallucinate?
 
-Think of evaluating a RAG pipeline like evaluating a research assistant. You don't just test whether they can write clearly — you test whether they only cite what's actually in the documents you gave them, and don't confabulate sources that support their answer.
+Faithfulness (groundedness) is the dominant quality signal. A model that confidently generates plausible-but-wrong answers outside the retrieved context is dangerous regardless of benchmark scores.
 
-**Practical RAG model selection:**
+Practical selection criteria for RAG:
 
-- Run evaluation separately on retrieval quality (does the right content come back?) and generation quality (is the answer faithful to what came back?)
-- Measure hallucination rate on held-out examples where you know the ground truth
-- Prompt caching of stable context (system prompt + RAG template) is the dominant cost lever — a well-cached RAG pipeline sees 70-80% of input tokens served from cache at 10% of the base input price. Choose the model and prompt structure simultaneously; you can't retrofit caching onto a poorly structured prompt.
+- Evaluate retrieval and generation separately
+- Measure hallucination rate on held-out examples with known ground truth
+- Prompt caching of stable context (system prompt + RAG template) is the dominant cost lever: a well-cached RAG pipeline sees 70-80% of input tokens served from cache at [10% of the base input price](https://docs.anthropic.com/en/docs/about-claude/pricing#prompt-caching). Structure prompts for cacheability from the start; retrofitting is expensive.
 
-For most RAG use cases, mid-tier models (Claude Sonnet, GPT-4o mini) outperform the expected quality gap vs. frontier models because faithfulness is a controllable behavior with good prompting — it doesn't require maximum model intelligence. Spend the evaluation time measuring faithfulness, not benchmarking raw intelligence.
+For most RAG, mid-tier models (Claude Sonnet, GPT-4o mini) close the quality gap with frontier models because faithfulness is a controllable behavior with good prompting; it doesn't require maximum model intelligence. Escalate to a frontier model only if faithfulness still fails your eval after prompt tuning.
 
----
+### Code generation: private codebases always underperform benchmarks
 
-### Code Generation: Why Private Codebases Always Underperform Benchmarks
+The canonical benchmark is SWE-bench, specifically SWE-bench Verified (500 human-validated Python tasks) for screening, and increasingly [SWE-bench Pro](https://labs.scale.com/leaderboard/swe_bench_pro_public) for harder signal.
 
-The canonical benchmark for code generation agents is SWE-bench — specifically SWE-bench Verified (500 human-validated Python tasks) for initial screening, and increasingly SWE-bench Pro for harder signal.
+#### SWE-bench Verified has contamination problems
 
-Here's the important context:
+[OpenAI deprecated reporting against it](https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/) in February 2026 after audits found benchmark tasks with solutions leakable from issue text, and models recalling file-path and release-note details from training data in a majority of probed cases. Top models score 70%+ on Verified. On SWE-bench Pro, a contamination-resistant alternative from Scale AI, top models score around **23%**.
 
-**SWE-bench Verified has contamination problems.** OpenAI deprecated reporting against it in February 2026 after audits found that many benchmark tasks had solutions leakable from issue text, and that models recalled file paths from training data up to 76% of the time. Top models score 70%+ on Verified. On SWE-bench Pro — a contamination-resistant alternative built by Scale AI — top models score around **23%**. That gap tells you something important about what the leaderboard is actually measuring.
+![Bar chart: ~70% on SWE-bench Verified versus ~23% on SWE-bench Pro](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Chosing%20the%20right%20model%20for%20your%20Inference%20use%20case/swebench_verified_vs_pro.png)
 
-![Bar chart: top-model score around 70% on SWE-bench Verified versus around 23% on SWE-bench Pro](https://res.cloudinary.com/iambigmomma/image/upload/v1782378407/blog/model-selection/swebench_verified_vs_pro.png)
+_Same task domain, different benchmark: the contamination-resistant set tells a very different story._
 
-_Same task, different benchmark: the contamination-resistant set tells a very different story._
+#### Your codebase is the only honest benchmark
 
-The analogy: a student who scored 95% on last year's exam. Very impressive — until you learn they memorized the answer key. Test them on new material and the number looks very different.
+Models that perform well on SWE-bench do so on public Python repositories with common patterns. Your private codebase has different conventions, abstractions, and test structures. Performance is always lower; the question is how much, and it varies across models.
 
-For code generation, the only authoritative signal is evaluation on your actual codebase. Models that perform well on SWE-bench do so on public Python repositories with common patterns. Your private codebase has different conventions, different abstractions, different test structures. Performance is always lower than the benchmark — the question is how much lower, and the answer varies substantially across models.
+Practical code-generation selection:
 
-**Practical code generation model selection:**
+- Use SWE-bench Verified and Pro as screening filters to eliminate poor performers
+- Run a private evaluation harness: representative tasks from your codebase with known correct solutions
+- Include [LiveCodeBench](https://livecodebench.github.io/): problems released after model training cutoffs make contamination structurally difficult
+- Measure on your top languages and frameworks specifically
 
-- Use SWE-bench Verified and [SWE-bench Pro](https://labs.scale.com/leaderboard/swe_bench_pro_public) as initial screening filters to eliminate obviously poor performers
-- For production decisions, run a private evaluation harness: a set of representative tasks from your own codebase with known correct solutions
-- [LiveCodeBench](https://livecodebench.github.io/) is worth including — it uses problems released after model training cutoffs, making contamination structurally difficult
-- Measure on your top languages and frameworks specifically. A model optimized for Python might behave differently on TypeScript in a monorepo with complex imports.
+Use a frontier model for complex, multi-file changes. For scoped edits, test generation, and boilerplate, a mid-tier model usually clears the bar at a fraction of the cost.
 
----
+### Customer support: TTFT dominates the UX
 
-### Customer Support and Chatbots: TTFT Is Your Primary UX Metric
+For customer-facing chat, model quality debates are secondary to **Time to First Token (TTFT)**, the delay between request and the first character of response.
 
-For customer-facing chat applications, the model quality debate is often secondary to a metric that doesn't appear on any benchmark leaderboard: **Time to First Token (TTFT)** — the delay between sending a request and receiving the first character of the response.
+Users perceive 500ms TTFT as instant and 2-second TTFT as slow. The content of the response barely registers until the speed is acceptable.
 
-The analogy: a restaurant where the waiter immediately acknowledges your order versus one where they disappear for 30 seconds before returning. The meal itself might be identical, but the experience of the first 30 seconds shapes your perception of the entire interaction. Users perceive a 500ms TTFT as "instant." They perceive a 2-second TTFT as "slow." The content of the response barely registers until the speed is acceptable.
+We measured TTFB (time to first byte, a proxy for TTFT) on a support-ticket classification prompt across four models on [DigitalOcean Serverless Inference](https://docs.digitalocean.com/products/inference/details/pricing/) (`inference.do-ai.run`, July 2026, 3 runs each, median reported):
 
-Implications for model selection in support applications:
+| Model             | TTFB median | Input price/M | vs Sonnet                 |
+| ----------------- | ----------- | ------------- | ------------------------- |
+| Llama 3.3 70B     | **389ms**   | $0.65         | 3.6× faster, 4.6× cheaper |
+| Claude Haiku 4.5  | 655ms       | $1.00         | 2.2× faster, 3× cheaper   |
+| Qwen3-32B         | 1,040ms     | $0.25         | 1.4× faster, 12× cheaper  |
+| Claude Sonnet 4.6 | 1,416ms     | $3.00         | baseline                  |
 
-- Smaller, faster models often deliver better user experience even if their measured output quality is marginally lower — because the UX is dominated by TTFT
-- Semantic and prompt caching of repeated FAQ-style queries is the dominant cost optimization — the same questions appear hundreds of times in support contexts; caching stable context dramatically reduces per-query cost
-- Streaming output matters: a model that streams the first token in 300ms feels faster than one that delivers a complete response after 1.5 seconds, even if the total completion time is the same
+Three runs per model is a thin sample for a metric this sensitive to network jitter and time-of-day load. Treat these multiples as directional rather than definitive. Llama 3.3 70B delivers sub-400ms TTFB at $0.65/M, 3.6× faster and 4.6× cheaper than Sonnet. For a customer-support chatbot where the user is watching the cursor, that is simultaneously better UX and lower cost. Sonnet's 1.4-second TTFB is approaching the threshold where users perceive delay.
 
-For classification-style support tasks (intent routing, escalation detection, sentiment tagging), the accuracy floor is typically reachable by models much smaller and cheaper than frontier models. Routing every support ticket through Claude Opus for intent classification is like using a sledgehammer to hang a picture frame.
+Implications:
 
-![Overkill: bringing far more model than the task needs](https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExczBxNm94OGtpbWZmczBibjZsN2RjejMzMWF2ODdzMXV2ODNneWQ0MSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/2NQod5LYtwDZe/giphy.gif)
+- Smaller, faster models deliver better UX even if output quality is marginally lower; the experience is dominated by TTFT
+- Semantic and prompt caching of repeated FAQ-style queries is the dominant cost optimization: the same questions appear hundreds of times; caching stable context reduces per-query cost dramatically
+- Streaming matters: 300ms to first token feels faster than a complete response after 1.5 seconds, even at the same total completion time
 
----
+For classification-style support tasks (intent routing, escalation detection, sentiment tagging), the accuracy floor is reachable by models much smaller and cheaper than frontier.
 
-### The Benchmark Trap: What the Numbers Don't Tell You
+### Benchmarks are screening filters, not verdicts
 
-Before committing to a model based on public benchmarks, there are four caveats worth internalizing:
+Four caveats before committing to a model based on public benchmarks:
 
-**1. MMLU is saturated.** State-of-the-art models cluster within 2–4% accuracy on MMLU, making it nearly useless for distinguishing between current frontier models. It's a floor test, not a differentiator.
+**MMLU is saturated.** State-of-the-art models cluster within 2-4% accuracy, making it nearly useless for distinguishing current frontier models.
 
-**2. Same model, different scores across harnesses.** Two teams running the same model on the same task with different prompting formats, few-shot examples, and answer-extraction logic can report scores that differ by 10–15%. The evaluation methodology is part of the result. When you see a benchmark number, ask: "run by whom, with what prompting setup?"
+**Same model, different scores across harnesses.** Two teams running the same model with different prompting formats and answer-extraction logic can report scores that differ by 10-15%. The evaluation methodology is part of the result.
 
-**3. SWE-bench contamination.** The gap between SWE-bench Verified (70%+ for top models) and SWE-bench Pro (23% for top models) illustrates how dramatically contamination inflates scores. Leaderboard rankings can look very different depending on which benchmark you're reading.
+**SWE-bench contamination.** The gap between Verified (70%+) and Pro (23%) illustrates how dramatically contamination inflates scores.
 
-![A public SWE-bench leaderboard of model scores](https://res.cloudinary.com/iambigmomma/image/upload/v1782378291/blog/model-selection/SWE_bench.png)
+![A public SWE-bench leaderboard of model scores](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Chosing%20the%20right%20model%20for%20your%20Inference%20use%20case/SWE_bench.png)
 
-_A public SWE-bench leaderboard. Treat the ranking as directional — the same model can score differently depending on the evaluation harness._
+_A public SWE-bench leaderboard. Treat the ranking as directional; the same model scores differently depending on the evaluation harness._
 
-**4. Your data is the only authoritative signal.** Every benchmark was built from someone else's distribution. Your use case has a different distribution — different domain vocabulary, different user query patterns, different document structures. A model that ranks second on a public benchmark may outperform the top-ranked model on your specific task. The only way to know is to evaluate on your own data.
+**Your data is the only authoritative signal.** Every benchmark was built from someone else's distribution. A model that ranks second on a public benchmark may outperform the top-ranked model on your specific task. The only way to know is to evaluate on your own data.
 
----
+### A repeatable model-selection workflow
 
-### The Model Advisor Approach
+So here is the repeatable model-selection workflow that you can use to choose the right model for your inference use case:
 
-When working with engineering teams on model selection, the framework I use looks like this:
+1. **Define your accuracy floor**: the actual minimum threshold, not aspirational
+2. **Pick your evaluation metric**: COMET for translation, faithfulness for RAG, pass rate on your own harness for code, TTFT + task accuracy for support
+3. **Evaluate smallest-to-largest**: start with the cheapest viable model, work up until you clear your floor
+4. **Set a re-evaluation cadence**: model tiers evolve quickly
 
-1. **Define your accuracy floor** — not aspirational, the actual minimum threshold
-2. **Pick your evaluation metric** — for translation, COMET; for RAG, faithfulness/groundedness; for code, pass rate on your own harness; for support, TTFT + task accuracy
-3. **Evaluate smallest-to-largest** — start with the cheapest viable model, work up until you clear your floor
-4. **Set a re-evaluation cadence** — model tiers evolve quickly; what required Sonnet six months ago may now be achievable with Haiku
+The output is a decision matrix: model X for tasks of type A, model Y for type B, with escalation logic to model Z when confidence is low.
 
-The output is a decision matrix specific to your use case — not "use model X" but "use model X for tasks of type A, model Y for tasks of type B, with escalation logic to model Z when confidence is low."
+[DigitalOcean's Inference Router](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/) automates this: routing requests across model tiers based on task complexity without custom routing logic. The decision matrix becomes configuration, not code. The June 2026 live runs in [Multi-Model API Cost Governance](https://www.digitalocean.com/community/tutorials/inference-router-multi-model-api-cost-governance) measured a **39.6% cost reduction vs Sonnet-only** and **63.7% vs Opus-only** on a mixed classify/Q&A/reasoning traffic split, purely from routing, no prompt or model changes. The deeper architectural story will be covered in the next article in this series.
 
-This is exactly what [DigitalOcean's Inference Router](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/) automates: routing requests across model tiers based on task complexity, without requiring you to maintain custom routing logic. The decision matrix becomes configuration, not code. The deeper architectural story behind multi-provider and multi-model routing is covered in Article 5 of this series.
-
----
-
-### Summary
-
-Model selection is not a one-time decision — it's a process. The key principles:
-
-- **Establish your accuracy floor first**, then find the cheapest model that clears it — not the other way around
-- **Use the right evaluation metric** for your task type: COMET for translation (not BLEU), faithfulness for RAG, private harness performance for code, TTFT for customer-facing chat
-- **Benchmarks are screening filters, not verdicts** — MMLU is saturated, SWE-bench has contamination issues, and the same model scores 10–15% differently across evaluation harnesses
-- **Your own data is the only authoritative signal** — every public benchmark was built from someone else's distribution
-- **Smaller specialists beat larger generalists** on their home turf — fine-tuned NLLB-200 3.3B for low-resource translation, a well-prompted Haiku for FAQ classification
-
-The expensive model is rarely the right answer. The right answer is the smallest model that reliably clears your accuracy floor — evaluated on your data, on your task, with your metric.
+In case you haven't, please read the first article in this series on [Why Your LLM Bill Is 3× What You Expected](/blog/llm-bill-3x) to understand the cost implications of model selection.
 
 ### References
 
-- [What is the best LLM for translation?](https://lokalise.com/blog/what-is-the-best-llm-for-translation/) — Lokalise
-- [Rapidata Translation Benchmark: DeepL vs DeepSeek-R1/Llama/Mixtral](https://huggingface.co/posts/jasoncorkill/521063845119914) — HuggingFace
-- [NLLB-200 3.3B Model](https://huggingface.co/facebook/nllb-200-3.3B) — Meta / HuggingFace
-- [SWE-bench Pro Leaderboard](https://labs.scale.com/leaderboard/swe_bench_pro_public) — Scale AI
-- [SWE-bench Verified Leaderboard 2026](https://leaderboard.steel.dev/leaderboards/swe-bench-verified/) — Steel.dev
-- [AI Translation Companies in 2026: Vendor Comparison](https://www.forasoft.com/blog/article/ai-translation-companies) — Forasoft
+- [How to Evaluate Models](https://docs.digitalocean.com/products/inference/how-to/evaluate-models/) (DigitalOcean Model Evaluations, translation eval methodology)
+- [Multi-Model API Cost Governance with the Inference Router](https://www.digitalocean.com/community/tutorials/inference-router-multi-model-api-cost-governance) (DigitalOcean, June 2026 live runs)
+- [Model Evaluations: Prove Your Routing Policy Actually Works](https://www.digitalocean.com/blog/model-evaluation-public-preview) (DigitalOcean)
+- [What is the best LLM for translation?](https://lokalise.com/blog/what-is-the-best-llm-for-translation/) (Lokalise)
+- [Rapidata Translation Benchmark: DeepL vs DeepSeek-R1/Llama/Mixtral](https://huggingface.co/posts/jasoncorkill/521063845119914) (HuggingFace)
+- [NLLB-200 3.3B Model](https://huggingface.co/facebook/nllb-200-3.3B) (Meta / HuggingFace)
+- [SWE-bench Pro Leaderboard](https://labs.scale.com/leaderboard/swe_bench_pro_public) (Scale AI)
+- [Why SWE-bench Verified No Longer Measures Frontier Coding Capabilities](https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/) (OpenAI, February 2026)
+- [LiveCodeBench](https://livecodebench.github.io/) (Contamination-resistant code benchmark)
+- [Anthropic API Pricing](https://docs.anthropic.com/en/docs/about-claude/pricing)
+- [DigitalOcean Inference Pricing](https://docs.digitalocean.com/products/inference/details/pricing/)
+- [How to Use Inference Router](https://docs.digitalocean.com/products/inference/how-to/use-inference-router/) (DigitalOcean Documentation)
+
+---
+
+_This is Article 2 in a 5-part series on LLM inference in production. [Article 1](/blog/llm-bill-3x) covers the hidden cost multipliers behind an inference bill. [Article 3](/blog/prompt-caching) covers prompt caching in practice. [Article 4](/blog/multi-provider-routing) covers multi-provider routing architecture. [Article 5](/blog/full-stack-ai-tco) examines total cost of ownership for a full AI stack._

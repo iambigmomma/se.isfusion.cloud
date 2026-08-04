@@ -1,310 +1,252 @@
 ---
 title: '提示快取實戰——從 7% 到 74% 命中率'
-description: '提示快取是多數團隊尚未充分發揮、槓桿效益最高的成本與延遲最佳化手段。本文說明其運作機制、經濟效益，以及從個位數命中率一步步提升到 60–80% 的具體路徑——包含那個毀掉多數部署快取效果的單一錯誤。'
+description: '提示快取是多數團隊尚未充分發揮、槓桿效益最高的成本與延遲最佳化手段。本文說明其運作機制、經濟效益，以及從個位數命中率一步步提升到 60–80% 的具體路徑——包含 DigitalOcean serverless 上的第一手基準測試，以及那個會毀掉快取效果的版面配置錯誤。'
 banner: 'prompt-caching-banner'
 publishedAt: '2026-07-24'
 tags: 'ai-ml,gen-ai,llm,cost-optimization,prompt-engineering'
 ---
+
 > *利益揭露：我是 DigitalOcean 的 Solutions Architect，所以文中提到 DigitalOcean 產品時，是「業內人的觀點」而非中立第三方——這些地方我都會明確標示，其餘分析則盡量保持廠商中立。以下皆為個人觀點。*
+
+*本文的英文版本已發表於 [DigitalOcean Community](https://www.digitalocean.com/community/conceptual-articles/prompt-caching-in-practice-hit-rate)。*
 
 *提示快取的運作機制，加上在 DigitalOcean Serverless 上的第一手量測（Anthropic 風格的顯式 `cache_control`）。機制本身跨供應商通用；DigitalOcean 的數字來自有記錄的基準測試，不是行銷素材。*
 
-### 前言
+提示快取是多數生產環境 LLM 團隊「已經設定好、卻沒有真正受益」的最高槓桿成本手段。[ProjectDiscovery 一份有文件記錄的生產環境案例](https://projectdiscovery.io/blog/how-we-cut-llm-cost-with-prompt-caching)同時展示了失敗模式與修正方式：一個資安情報代理在每次請求都送出相同的 4,000 token 系統指令、工具定義與分析框架，後面才接上要評估的特定威脅資料——快取命中率卻只有 **7%**。一個結構性調整，把單一動態識別碼從提示中間搬到結尾，就讓命中率提升到 **74%**，每月推論帳單下降 59%。
 
-某個資安情報團隊正在大規模運行一個 AI 代理。每次代理分析一個新威脅時，都會送出一個包含相同 4,000 token 系統指令、相同工具定義、相同分析框架的提示——後面再接上要評估的特定威脅資料。他們的提示快取命中率：**7%**。
+這個模式很常見：原則上快取設定是正確的，但一個位置錯誤的動態欄位就破壞了整段前綴。本文說明提示快取實際上如何運作、為何多數實作會出錯，以及從個位數命中率邁向生產環境可達成的 60–80% 區間的具體步驟。
 
-他們做了一個結構性調整：把單一一個動態識別碼從提示中間搬到了結尾。命中率隨即躍升至 **74%**——而且穩定維持在那裡。他們的每月推論帳單下降了 59%。
+### TL;DR
 
-[這是一個有文件記錄的生產環境案例](https://projectdiscovery.io/blog/how-we-cut-llm-cost-with-prompt-caching)，而非理論上的最佳化。它代表了生產環境 LLM 部署中最常見的模式之一：團隊原則上已正確設定了提示快取，卻幾乎得不到任何好處——只因為一個位置錯誤的動態欄位破壞了整個快取。
+- **對代理式（agentic）與多輪工作負載而言，提示快取是槓桿效益最高的單一成本手段——前提是前綴結構正確。** 某個生產環境案例（ProjectDiscovery）僅靠一次重新排序的修正，就把快取命中率從 7% 拉到 74%，推論成本下降 59%。
+- **三種不同的快取解決三種不同的問題：** KV cache（自動、在單一請求內）、prefix cache（跨請求，本文主題），以及 semantic cache（應用層，處理語意相近的重複查詢，而非完全相同的字串）。
+- **快取是以「位元組完全相同的前綴內容」作為鍵值。** 一個動態欄位——時間戳記、session ID、個別使用者資料——只要放在快取邊界*之前*，就會讓它後面的整段前綴失效，而不只是那個欄位本身。
+- **Anthropic 風格的顯式快取在大約 1 次命中後就回本**（標準費率為寫入 1.25x、讀取 0.10x）；之後每一次命中都是淨節省。OpenAI 的快取讀取折扣會隨模型世代不同——歷史上是 50% 折扣，在最新模型上逐步提高到接近 90% 折扣——所以請查你實際呼叫的那個模型的費率，不要假設只有一個數字。
+- **最小可快取前綴長度會隨模型與世代改變。** 較舊的 Claude 3.x 最短 1,024–2,048 token 就能快取；較新的模型如 Claude Haiku 4.5 則需要 4,096 token。不要假設同一個門檻適用於所有模型版本。
+- **DigitalOcean Serverless 上的第一手量測**（Claude Haiku 4.5，約 6,000 token 前綴）：把一個動態欄位移出快取前綴後，命中率從 0% 變成 99.3%，輸入成本約下降 90%。
+- **Google 的 Vertex AI 團隊用快取感知路由把前綴快取命中率從 35% 翻倍到 70%**——在重脈絡的程式碼代理工作負載上把 TTFT 降低 35%，在突發性聊天工作負載上把 P95 尾端延遲改善 52%（這是兩種不同的流量樣態，不是同一種量了兩次）。
 
-本文說明提示快取（prompt caching）實際上如何運作、為何多數實作會出錯，以及從個位數命中率邁向生產環境可達成的 60–80% 區間的具體步驟。
+### KV、prefix 與 semantic 快取解決三種不同的問題
 
-### 重點摘要
+在 LLM 推論的語境中，「快取」指的是三件不同的事，混淆它們會讓最佳化的力氣用錯地方：
 
-* 提示快取是多數團隊尚未充分發揮、同時兼顧成本 *與* 延遲、槓桿效益最高的最佳化手段。
-* 有三種常被混淆的不同快取：KV（自動、在單一請求內）、prefix/prompt（跨請求，**你透過提示結構來控制它**），以及 semantic（語意快取，應用層，用於重複查詢）。
-* 快取讀取的成本約為輸入費率的 ~10%（即 90% 折扣）；在 1.25× 的寫入溢價下，大約**一次**命中後就回本，因此快取幾乎總是划算。
-* 前綴有最小可快取長度，而且會隨模型世代變動：較舊的 Claude 3.x 最短 1,024–2,048 token 就能快取，而 Claude Haiku 4.5 需要 4,096 token。
-* 頭號失敗模式：一個動態欄位（時間戳記、session ID）嵌在原本靜態的提示中，破壞了整個前綴——某個團隊只是把單一欄位搬到結尾，命中率就從 7% 提升到 74%。
-* 把所有靜態內容放最前、所有動態內容放最後，並將快取命中率當作第一級指標來追蹤。60–80% 是務實可達的目標——而且它降低的不只是成本，還有延遲。
+**1. KV cache——自動發生，在單一請求內部。** 當模型生成回應時，會為每個輸入 token 計算鍵值（key-value）注意力狀態。若沒有 KV cache，每個解碼步驟都得對所有先前的 token 重新計算注意力。KV cache 儲存這些狀態，讓解碼可以增量進行。它永遠開啟、不需要任何設定，並在單一請求內加速生成。你無法控制它；你自動受益於它。
 
----
+**2. Prompt cache（prefix cache，前綴快取）——跨請求，由你控制。** 前綴快取把 KV cache 的概念延伸到多個彼此獨立的請求之間。當多個請求共用相同的開頭 token——相同的系統提示、相同的少樣本（few-shot）範例、相同的參考文件——模型會重用第一次請求算出的 KV 狀態，而不是每次呼叫都重新計算。本文其餘部分談的就是這種快取。穩定的開頭 token 就是可快取的前綴；每次請求各自不同的內容則是動態尾段。
 
-### 你必須理解的三種快取
+**3. Semantic cache（語意快取）——應用層，獨立的系統。** 語意快取儲存完整的輸入輸出配對，並在新查詢與先前某個查詢在語意上相近時（依向量嵌入相似度判斷）直接取回結果。這不是模型層級的功能——而是你在應用層用向量資料庫實作出來的模式。它與提示快取互補，不是替代品。
 
-在 LLM 推論的語境中，「快取」其實指三種不同的東西，混淆它們會導致最佳化努力用錯地方。以下是清楚的分類：
-
-**1. KV cache（鍵值快取）**——自動發生，在單一請求內部
-
-當模型生成回應時，會為每個輸入 token 計算鍵值（key-value）注意力狀態。若沒有 KV cache，每個解碼步驟都得重新計算對所有先前 token 的注意力。KV cache 儲存這些狀態，讓解碼可以增量進行。它永遠開啟、不需任何設定，並能在單一請求內加速回應生成。你無法控制它；你自動受益於它。
-
-可以把它想成一位譯者，在處理一份文件時邊做邊寫筆記——他翻譯到第五段時，不會每次都把第一段重讀一遍。
-
-**2. Prompt Cache（提示快取／前綴快取，Prefix Cache）**——跨請求，由你控制
-
-前綴快取把 KV cache 的概念延伸到多個彼此獨立的請求之間。當多個請求共用相同的開頭 token——相同的系統提示、相同的少樣本（few-shot）範例、相同的參考文件——模型會重用第一次請求所算出的 KV 狀態，而不是每次呼叫都重新計算。
-
-這就是本文其餘部分所討論的快取。它要求你正確地建構提示結構。一旦運作起來，它是現有最大的成本槓桿。
-
-想想一位已經把詳細的課程筆記準備好一次的老師。每當有新學生提問，老師不會從頭把整套課綱重讀一遍——他直接從備好的筆記中取用，只處理那個新的具體問題。筆記就是可快取的前綴；學生的問題就是動態的尾段。
-
-**3. Semantic Cache（語意快取）**——應用層，獨立的系統
-
-語意快取儲存完整的輸入—輸出配對，並在新查詢與先前某個查詢語意相似時（依據 embedding 相似度）將其取回。這不是模型層級的功能——它是你在應用層用向量儲存（vector store）實作的一種模式。
-
-語意快取與提示快取互補，而非取代。它在高重複性的 FAQ 式查詢上表現出色（例如某個客服聊天機器人中，40% 的問題都是「我要怎麼重設密碼」）。它需要一個 embedding 模型、一個向量儲存，以及對快取過時（staleness）的審慎管理。那個門檻問題——要相似到什麼程度才算夠相似而能回傳已快取的回應？——通常設在 95% 餘弦相似度（cosine similarity）左右，而調校它是在精確度與命中率之間的權衡。
+你可以在 [Prompt Caching](https://www.digitalocean.com/community/tutorials/prompt-caching-explained) 讀到更多說明。
 
 ![Three caches compared: KV within a request, prefix across requests, and semantic at the application layer](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Prompt-Caching-Jeff/Screenshot%202026-07-24%20at%2011.52.37%E2%80%AFAM.png)
 
-*三個層級的三種快取：KV（自動、在單一請求內）、prefix（跨請求，由提示結構控制），以及 semantic（應用層，用於重複查詢）。*
+*三種不同層級的快取：KV（自動，在單一請求內）、prefix（跨請求，由提示結構控制），以及 semantic（應用層，處理重複查詢）。*
 
----
+### 快取讀取只要輸入費率的 10%；寫入溢價大約 1 次命中就回本
 
-### 前綴快取的經濟學
+經濟效益正是讓前綴快取成為最主要成本最佳化手段的原因。
 
-讓前綴快取成為主導性成本最佳化手段的數字：
+在 [Anthropic（Claude）](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)上，一次快取寫入的成本是**基礎輸入費率的 1.25×**（5 分鐘 TTL）或 **2×**（1 小時 TTL）；一次快取讀取的成本則是**基礎輸入費率的 0.10×——也就是 90% 折扣**。以 Claude Sonnet 4.6 每百萬輸入 token $3.00 計算，你要付 $3.75/M 寫入一筆 5 分鐘視窗的快取，之後每次讀取付 $0.30/M。如果一段快取前綴在過期前被讀取 10 次，你付的是一次 $3.75 加上讀取 $0.30 × 10 = $3.00——相對於不用快取的 $3.00 × 11 = $33.00。以這樣不算多的命中次數而言，該前綴的成本已經下降 80%。
 
-**Anthropic（Claude）：**
-- 快取寫入：**1.25× 基礎輸入費率**（5 分鐘 TTL）或 **2× 基礎輸入費率**（1 小時 TTL）
-- 快取讀取：**0.10× 基礎輸入費率**——即 **90% 折扣**
+OpenAI 的快取輸入折扣在整個型錄中並不是固定數字——它隨模型世代而異。歷史上 GPT-4o 系列是 50% 折扣；在 OpenAI 最新的模型上，折扣已經提高到接近 90%，也就是 Anthropic 收取的同一個 0.10x 讀取費率。請查你實際呼叫的那個模型的費率，不要假設單一數字適用於 OpenAI 的每個模型。DigitalOcean 的姊妹文章 [When Prompt Caching Actually Pencils Out](https://www.digitalocean.com/community/tutorials/prompt-caching-cost-break-even) 有 Anthropic、OpenAI 以及 DigitalOcean 自家定價頁上開源模型的完整逐模型費率表，值得與本文一起閱讀。
 
-以 Claude Sonnet 4.6、每百萬輸入 token $3.00 計算：為一個 5 分鐘視窗寫入一筆快取項目要付 $3.75/M，而之後每次讀取付 $0.30/M。如果一個已快取的前綴在過期前被讀取 10 次，你只付了一次 $3.75，加上讀取 $0.30 × 10 = $3.00——相較於不使用快取的 $3.00 × 11 = $33.00。對這樣不算高的命中次數來說，這個前綴的成本就降低了 80%。
+寫入成本是必須理解的變數。快取不是免費的——你在第一個填充快取的請求上付了溢價，而只有在後續請求命中得夠頻繁時，這筆帳才划算。一般化的回本點是 `h* = (w − 1) / (1 − r)`，其中 `w` 是寫入倍率、`r` 是讀取倍率。代入 Anthropic 5 分鐘級距的費率（`w = 1.25`、`r = 0.10`），得到 `h* = 0.25 / 0.90 ≈ 0.28`，無條件進位後就是**只要 1 次快取命中**——過了這一次，之後每一次命中都是淨節省。你可以直接拿上面的實際數字驗證：在剛好 1 次命中（總共 2 次請求）時，用快取的成本是 $3.75 + $0.30 = $4.05，不用快取則是 $3.00 × 2 = $6.00——已經比較便宜。對於每次請求都會送出的系統提示，回本幾乎是立即的。對於只被引用幾次的大型文件，則要算一下讀取節省是否值得那筆寫入成本。完整推導以及 DigitalOcean 支援的每一種費率級距的實例，請見上面連結的姊妹文章。
 
-**OpenAI：** 已快取輸入的折扣*不是*整個產品線通用的單一數字——它會隨模型世代不同。過去在 GPT-4o 家族是 50% 折扣；在 OpenAI 最新的模型上，折扣已往 90% 靠攏，也就是 Anthropic 收取的同一個 0.10× 讀取費率。請查你實際呼叫的那個模型的費率，不要假設整個產品線都適用同一折扣。
+**前綴快取什麼時候有幫助——什麼時候沒有：**
 
-寫入成本是要理解的關鍵變數。它意味著快取並非免費——填入快取的第一次請求會付出溢價。只有當後續請求夠頻繁地命中快取時，這筆帳才會對你有利。對於每次請求都會送出的系統提示，回本幾乎是瞬間的。對於只被引用幾次的大型文件，你得計算讀取所省的錢是否值得那筆寫入成本。
+- **有幫助：** 一段龐大且穩定的前綴（系統提示 + 工具定義 + 少樣本範例 + RAG 樣板），在 TTL 視窗內被大量請求重複使用。前綴越大、被重用得越多，效益越大。
+- **沒幫助：** 低於供應商最小可快取長度的前綴。在 DigitalOcean serverless 上，低於約 4,000 token 的前綴對我們來說完全沒有快取——這與 Anthropic 目前對 Claude Haiku 4.5 這類較新模型要求的 4,096 token 最低門檻一致。不過這個門檻並非適用於所有 Claude 世代：較舊的 Claude 3.x 最短 1,024–2,048 token 就能快取。請查你使用的那個模型版本的最低門檻——不要假設單一門檻到處適用——並參考上面提到的姊妹文章中的逐模型對照表。此外，對於重用率低、1.25–2× 寫入溢價永遠攤不掉的前綴，或請求間隔時間超過 TTL 的低流量端點，快取同樣沒有幫助。
 
-交叉點有一個封閉解。設寫入溢價為 `w`、讀取費率為 `r`（兩者都是基礎輸入費率的倍數），回本所需的命中次數為：
+### 前綴中的一個動態欄位就會把命中率打到個位數
 
-```
-h* = (w − 1) / (1 − r)
-```
+這就是上面 ProjectDiscovery 團隊犯的錯，也是絕大多數第一次實作快取的團隊會犯的錯。
 
-以 Anthropic 的 5 分鐘層級（`w = 1.25`、`r = 0.10`）代入：`h* = 0.25 / 0.90 ≈ 0.28`——無條件進位後就是**僅僅一次快取命中**。直接驗算：在剛好 1 次命中（總共 2 個請求）時，使用快取的成本是 $3.75 + $0.30 = **$4.05**，而不使用快取則是 $3.00 × 2 = **$6.00**。已經更便宜了。之後的每一次命中都是純粹的節省。
+**前綴快取要求從提示開頭起「逐位元完全相同」的內容。** 快取是以從第一個 token 開始的精確 token 序列作為鍵值。任何改動——任何字元、任何在請求之間會變動的欄位——都會把快取邊界重設在該處。
 
-**前綴快取何時有效——何時無效**
-
-- **有效：** 多數請求都會送出的穩定系統提示、工具定義或參考文件；在同一個 TTL 視窗內有大量請求共用前綴的爆發性流量；長度明顯高於該模型最小可快取長度的前綴。
-- **無效：** 重複使用率低、1.25–2× 的寫入溢價永遠攤不掉的前綴；請求間隔時間超過 TTL 的低流量端點；以及低於最小可快取長度的前綴——較舊的 Claude 3.x 從 1,024–2,048 token 起就能快取，但像 Claude Haiku 4.5 這類較新的模型需要 4,096 token，所以一個「短但穩定」的前綴有可能根本不會被快取。
-
----
-
-### 為何多數提示快取實作會失敗
-
-這就是前言中那個資安團隊所犯的錯誤，也是絕大多數首次實作快取的團隊會犯的錯誤：
-
-**前綴快取要求從提示開頭起逐位元（bit-for-bit）完全相同的內容。** 快取是以從第一個 token 起的精確 token 序列為鍵（key）。任何變動——任何一個字元的改變、任何在請求之間會變化的欄位——都會在那個點重設快取邊界。
-
-想像一個模板，前半部分是靜態的（系統指令、工具定義），而中間某處有一個 `session_id`、一個 `timestamp` 或某個逐使用者設定欄位，會在每次請求時改變。即使 90% 的提示內容都相同，快取也只涵蓋到第一個差異之前的 token。那個點之後的一切，每次請求都從頭重新計算。
+想像一個樣板：前半部是靜態的（系統指令、工具定義），中間某處卻有一個 `session_id`、一個 `timestamp`，或一個每次請求都會變的個別使用者設定欄位。就算 90% 的提示內容完全相同，快取也只涵蓋到第一個差異點之前的 token。該點之後的一切，每次請求都要從頭重算。
 
 ![Stable versus broken prefix layout: with the dynamic field at the tail the whole prefix stays cached; with it in the middle the cache collapses at that point](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Prompt-Caching-Jeff/Screenshot%202026-07-24%20at%2011.52.52%E2%80%AFAM.png)
 
-*相同內容，只搬動一個欄位。穩定版面：動態欄位放在尾端，整個前綴都能被快取。破壞版面：欄位卡在前綴中間，它之後的一切每次請求都要重算。*
+*相同內容，只搬動一個欄位。穩定版面：動態欄位落在尾段，因此整段前綴都保持可快取。破損版面：欄位落在前綴中間，它之後的一切在每次請求都要重算。*
 
-這就是為什麼那個資安團隊的命中率只有 7%：他們有一個動態欄位——一個威脅識別碼——嵌在原本穩定的提示模板中間。系統提示、所有分析指令、所有工具定義，每次都被重新計算，只因為那一個識別碼破壞了前綴比對。
+這正是那個資安團隊命中率只有 7% 的原因：一個動態的威脅識別碼夾在原本穩定的樣板中間，導致系統提示、分析指令與工具定義每次都被重算。把該識別碼移到結尾——放在所有穩定內容之後——就恢復了完整的可快取前綴，並在單一次部署中把命中率從 7% 拉到 74%。
 
-把該識別碼搬到提示結尾——放在所有穩定內容之後——就讓完整的前綴恢復可被快取。命中率在單次部署中就從 7% 上升到 74%。
+### 從個位數到 60–80% 命中率的四個步驟
 
----
+**步驟 1：找出你的穩定前綴。** 盤點你的提示結構，並把每個組成分類：
 
-### 一步步的最佳化路徑
-
-**步驟 1：找出你的穩定前綴**
-
-繪製出你的提示結構。為每個元件分類：
-
-| 元件 | 是否穩定？ | 範例 |
-|-----------|---------|---------|
-| 系統提示／角色設定 | 是 | "You are a helpful assistant..." |
+| 組成 | 是否穩定？ | 範例 |
+| --- | --- | --- |
+| 系統提示／人設 | 是 | 「You are a helpful assistant…」 |
 | 工具／函式定義 | 是 | 完整的工具 schema |
 | 少樣本範例 | 是 | 靜態範例 |
-| RAG 上下文模板 | 大致是 | 文件格式、章節標題 |
-| 取回的文件 | 視情況 | 相同文件＝可快取；逐查詢文件＝不可快取 |
-| 使用者查詢 | 否 | 每次請求都改變 |
+| RAG 脈絡樣板 | 大致穩定 | 文件格式、章節標題 |
+| 取回的文件 | 視情況 | 相同文件＝可快取；每次查詢不同＝不可 |
+| 使用者查詢 | 否 | 每次請求都不同 |
 | Session 變數 | 否 | 使用者 ID、對話 ID、時間戳記 |
-| 逐請求中繼資料 | 否 | 請求專屬的上下文 |
+| 每次請求的中繼資料 | 否 | 請求專屬的脈絡 |
 
-你的可快取前綴，是在你大多數請求中都維持相同的那段最長開頭序列。在多數部署中，這包含系統提示、工具定義，以及任何固定的少樣本範例——通常是 1,000–8,000 token 的穩定內容。
+你可快取的前綴，就是在多數請求之間保持相同的最長開頭序列——通常是系統提示、工具定義與固定的少樣本範例，大約 1,000–8,000 token 的穩定內容。
 
-**步驟 2：把所有動態內容移到結尾**
+**步驟 2：把所有動態內容移到最後。** 重新調整結構，讓穩定前綴排在最前面且中間不被打斷，所有動態內容都接在最後。生產環境的提示會自然而然累積動態欄位——這裡加一個 session ID、那裡塞一個使用者偏好——而每一次插入都在無聲地扼殺快取。目標結構：
 
-重新調整你的提示結構，讓穩定前綴排在最前面、不被打斷，所有動態內容則接在最後。這聽起來理所當然，但生產環境的提示往往會自然累積動態欄位——這裡加一個 session ID、那裡塞一個使用者偏好——而這些插入會悄悄地扼殺快取。
-
-目標結構：
-```
+```bash
 [System instructions — fully static]
-[Tool definitions — fully static]  
+[Tool definitions — fully static]
 [Few-shot examples — fully static]
 [Retrieved context — stable template, variable content]
 [User query — dynamic]
 [Session metadata — dynamic, at the very end]
 ```
 
-具體來說，以 Anthropic 風格的 `cache_control` 中斷點為例，這就是「永遠不會快取」與「幾乎總是命中」兩種提示的差別：
+具體來說，在 [DigitalOcean serverless](https://docs.digitalocean.com/products/inference/how-to/use-prompt-caching/) 提供的 Anthropic 風格 `cache_control` API 中，陷阱就是一個每次請求都會改變的值（session id、時間戳記）落在被標記的前綴裡面，而修法是把它從 `system` 移到使用者輪次：
 
 ```json
-// BROKEN——session id 放在被快取的 system block 裡面。
-// 每個請求都會寫入一筆新的快取項目。實測：0% 命中。
-{
-  "system": [
-    {
-      "type": "text",
-      "text": "You are a threat analyst...\nSession: 8f3c-2201-aa19",
-      "cache_control": { "type": "ephemeral" }
-    }
-  ],
-  "messages": [{ "role": "user", "content": "Analyze this indicator..." }]
-}
+// The session id is DIFFERENT on every request — watch where it sits.
 
-// FIXED——靜態前綴被快取；session id 移到 user turn。
-// 實測：約 99% 命中。
+// BROKEN — id inside the cached system block:
 {
-  "system": [
-    {
-      "type": "text",
-      "text": "You are a threat analyst...",
-      "cache_control": { "type": "ephemeral" }
-    }
-  ],
-  "messages": [
-    {
-      "role": "user",
-      "content": "Analyze this indicator...\nSession: 8f3c-2201-aa19"
-    }
-  ]
+  "system": [{
+    "type": "text",
+    "text": "Session 4f9a-2c1e. You are a support agent. [ …600 lines of stable policy… ]",
+    "cache_control": {"type": "ephemeral"}
+  }],
+  "messages": [{"role": "user", "content": "How do I reset my password?"}]
 }
+// The next request carries "Session 7b3d-9f02…", so the system text is never
+// byte-identical twice — the whole prefix is recomputed. Measured: 0% hit.
+
+// FIXED — id moved to the user turn; system stays byte-identical:
+{
+  "system": [{
+    "type": "text",
+    "text": "You are a support agent. [ …600 lines of stable policy… ]",
+    "cache_control": {"type": "ephemeral"}
+  }],
+  "messages": [{"role": "user", "content": "Session 4f9a-2c1e. How do I reset my password?"}]
+}
+// The changing id now rides after the breakpoint, so the 600-line prefix
+// caches on every later request. Measured: ~99% hit.
 ```
 
-確切的請求格式請參考 DigitalOcean 的 [prompt caching 操作說明](https://docs.digitalocean.com/products/inference/how-to/use-prompt-caching/)。
+**步驟 3：把快取命中率當成第一級指標來監控。** 快取命中率應該和延遲、成本一起放在你的 LLM 維運儀表板上。它是領先指標：命中率下滑往往先於成本飆升，而且能在提示結構的退化變成帳單意外之前就讓問題浮現。多數供應商的 API 會在回應的中繼資料裡回傳快取使用量——把它記錄下來，並設定告警。
 
-**步驟 3：把快取命中率當作第一級指標來監控**
+**步驟 4：讓快取 TTL 對應你的流量間隔。** Anthropic 的 TTL 選項（5 分鐘或 1 小時）是維運上的限制，不只是定價級距。一個每 10 分鐘才有一次請求的部署，永遠不會命中 5 分鐘級距——請依 p50 的預期請求間隔來選 TTL，而不是尖峰突發值。對於突發型工作負載（每天一次批次作業在一小時內處理數千個請求，之後就安靜下來），即使寫入成本是 2×，1 小時 TTL 仍然勝出：寫入每小時只付一次，而讀取節省會在整波突發中不斷累積。
 
-快取命中率應該和延遲、成本並列出現在你的 LLM 運維儀表板上。它是一個領先指標：命中率下降往往預示著成本即將飆升，而且它能在提示結構退化變成帳單意外之前先把問題浮現出來。
+### 快取感知路由在兩種不同的 Vertex AI 工作負載上分別降低 TTFT 35% 與 P95 延遲 52%
 
-多數供應商的 API 會在回應的中繼資料中回傳快取使用情況。把它記錄下來。對它設定警示。
+提示快取帶來的成本節省已經有充分的文件記錄。延遲面的影響較少被討論，但可能同樣顯著。
 
-**步驟 4：理解快取 TTL 並據此規劃**
+[Google 的 Vertex AI 團隊記錄了](https://cloud.google.com/blog/products/containers-kubernetes/how-gke-inference-gateway-improved-latency-for-vertex-ai)：智慧路由——把共用前綴的請求送到已經快取該前綴的同一台推論伺服器——讓他們的前綴快取命中率從 35% 翻倍到 70%。Google 表示這在**重脈絡的程式碼代理工作負載**（Qwen3-Coder）上把 TTFT 降低了 **35%**，並在**突發性聊天工作負載**（DeepSeek V3.1）上把 **P95 尾端延遲改善了 52%**。這是兩種瓶頸不同的流量樣態——重脈絡的工作負載受限於重新計算的額外開銷，突發型工作負載則受限於佇列壅塞——而不是同一個工作負載用兩種方式量了兩次。
 
-Anthropic 的快取 TTL 選項（5 分鐘或 1 小時）不只是定價層級——它們是運維上的限制。一個低流量、每 10 分鐘才進來一個請求的部署，在 5 分鐘 TTL 這一層永遠不會看到快取命中。請依據你在 p50（而非突發尖峰）的預期請求間隔來選擇 TTL。
+機制是：快取命中省掉了提示中穩定部分的 prefill 計算。以一個 4,500 token 中有 4,000 token 已快取的提示為例，模型只需要對 500 個新 token 執行 prefill——prefill 的工作量大約減少 89%。prefill 是運算密集的；跳過它是實質的延遲改善，而不只是成本節省。
 
-對於流量呈突發模式的工作負載（例如每日批次作業，一小時內處理數千個請求，之後便歸於沉寂），即使寫入成本是 2×，數學也強烈偏好 1 小時 TTL——寫入成本每小時只付一次，而讀取節省會在整波突發中累積。
+### DigitalOcean Serverless 第一手實測：命中率 0% 到 99.3%，輸入成本降低約 90%
 
----
+為了拿出實際數字而不是引用廠商說法，我們直接對 [DigitalOcean Serverless Inference](https://docs.digitalocean.com/products/inference/details/pricing/#serverless-inference) 做了基準測試（Claude Haiku 4.5，**$1.00/M 輸入、$5.00/M 輸出**，約 6,000 token 的共用前綴，每種版面 1,500 個請求、共 3 輪）。有兩個值得記住的發現：
 
-### 生產環境驗證：70% 快取命中率對延遲帶來什麼影響
+**第一，這裡的快取是顯式的，不是自動的。** DigitalOcean serverless 採用 Anthropic 風格的模式：你要用 ephemeral 的 [`cache_control`](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) 中斷點標記穩定前綴。少了這個標記，不論提示結構整理得多乾淨，命中率都是 **0%**——而且存在最小可快取長度（約 2,300 token 的前綴沒有快取；約 6,000 token 的有，與前面提到的此模型 4,096 token 最低門檻一致）。這是前面描述的 5 分鐘／1 小時 TTL 機制，不是 vLLM 的自動前綴快取。
 
-提示快取帶來的成本節省已有充分記錄。較少被討論的是延遲影響，而它的意義可能同樣重大。
-
-[Google 的 Vertex AI 團隊記錄了](https://cloud.google.com/blog/products/containers-kubernetes/how-gke-inference-gateway-improved-latency-for-vertex-ai)：智慧路由——確保共用前綴的請求落在已快取該前綴的同一台推論伺服器上——讓他們的前綴快取命中率從 35% 翻倍到 70%。結果是：在 context 繁重的 coding-agent 工作負載上（Qwen3-Coder），**TTFT 降低 35%**；而在爆發性的聊天工作負載上（DeepSeek V3.1），**P95 尾端延遲改善 52%**。這是兩種瓶頸不同的流量型態——context 繁重的工作負載受限於重算開銷，爆發性工作負載則受限於佇列壅塞——而不是同一份工作負載用兩種方式量測的結果。
-
-其機制：快取命中消除了提示中穩定部分的 prefill（預填）運算成本。對一個 4,500 token 中有 4,000 token 已快取的提示，模型只需對 500 個新 token 執行 prefill——prefill 工作量大約減少了 89%。Prefill 是運算密集的；跳過它是有意義的延遲贏面，而不只是成本節省。
-
-### 第一手量測：DigitalOcean Serverless 上的提示快取
-
-為了用實際數字取代引用廠商數據，我們直接對 [DigitalOcean 的 serverless 推論端點](https://docs.digitalocean.com/products/inference/details/pricing/#serverless-inference)做了基準測試（Claude Haiku 4.5，每百萬輸入 $1.00、每百萬輸出 $5.00，一個約 6,000 token 的共用前綴，每種配置 1,500 個請求、共跑 3 輪）。有兩項值得內化的發現：
-
-**第一，這裡的快取是顯式的，不是自動的。** DigitalOcean serverless 採用 Anthropic 風格的模型：你用一個短暫的（ephemeral）`cache_control` 中斷點來標記穩定前綴。沒有這個標記，無論你的提示結構多乾淨，快取命中率都是 **0%**——而且有一個最小可快取長度（一個約 2,300 token 的前綴沒有被快取；約 6,000 token 的就有，這與前面提到該模型 4,096 token 的下限一致——低於約 4,000 token 的前綴在我們的測試中完全不會被快取）。這是先前所述的 5 分鐘／1 小時 TTL 機制，而不是 vLLM 的自動前綴快取。
-
-**第二，當前綴被正確標記後，版面配置的效果非常顯著。** 在模型與 token 數量都固定不變、僅移動逐請求動態欄位的情況下——把它從前綴內部移到尾段——量測到的快取命中率從 **0% 升到 99.3%**，而估計的輸入成本則從每 1,000 個請求 **$6.72 降到 $0.57——大約減少 90%**。這落在 90% 折扣的快取讀取經濟學所預測的範圍內：當你 99% 的輸入都以 0.1× 費率從快取供應時，你的輸入帳單會大約下降一個數量級。（我們量到的降幅比單純用命中率與折扣做的粗估再高幾個百分點；如果你要重現這個基準測試，請把確切百分比當作方向性參考，而不是用來編預算的數字，並改以你自己的流量型態去量測。）
+**第二，只要前綴標記正確，版面配置的效果非常顯著。** 在模型與 token 數固定不變、只把每次請求的動態欄位從前綴裡面移到尾段的情況下，量測到的快取命中率從 **0% 變成 99.3%**，估算的輸入成本從**每 1,000 個請求 $6.72 降到 $0.57——大約減少 90%**。這落在「快取讀取 90% 折扣」的經濟模型會預測的範圍內：當幾乎所有輸入都以 0.1× 的費率由快取供應時，輸入帳單大約會下降一個數量級。（我們量到的降幅比單純用命中率與折扣做的信封背面估算高出幾個百分點；如果你要重現這個基準測試，請把確切的百分比當成方向性參考，而不是拿來編預算的數字，並改以你自己的流量樣態實測。）
 
 ![DigitalOcean serverless prompt-caching benchmark: cache hit rate 0% to 99.3% and input cost $6.72 to $0.57 per 1,000 requests when the dynamic field moves out of the cached prefix](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Prompt-Caching-Jeff/Screenshot%202026-07-24%20at%2011.53.32%E2%80%AFAM.png)
 
-*在 DigitalOcean serverless 上的第一手量測（Claude Haiku 4.5、約 6,000 token 前綴、每種配置 1,500 個請求）：用 `cache_control` 標記前綴並把動態欄位移到尾端，命中率從 0% 升到 99.3%，輸入成本降低約 90%（每 1,000 個請求 $6.72 → $0.57）。*
+*DigitalOcean serverless 第一手實測（Claude Haiku 4.5，約 6,000 token 前綴，每種版面 1,500 個請求）：用 `cache_control` 標記前綴並把動態欄位移到尾段，命中率從 0% 變成 99.3%，輸入成本降低約 90%（每 1,000 個請求 $6.72 → $0.57）。*
 
-從數據得出的一個誠實提醒：在共用的 serverless 上，*可重現的* 贏面是**成本**，而非吞吐量。跨多次測試，TTFT 與吞吐量會隨佇列狀況起伏，而成本降幅則維持穩定。客戶端觀察到的快取吞吐量提升——也就是「釋出更多 GPU 週期給解碼」那套說法——會在**專用（dedicated）**端點上出現，在那裡你擁有整顆 GPU。DigitalOcean 為 GPU Droplets 推出的 [Inference Optimized Image](https://www.digitalocean.com/community/tutorials/llm-inference-optimization)，正是為這種情境，把自動前綴快取疊進 vLLM 服務堆疊；在專用 Droplet 上量測它的吞吐量差異，是順理成章的後續基準測試。
+資料上有一個誠實的但書：在共享的 serverless 上，*可重現*的效益是**成本，而不是吞吐量**。在各輪測試中，TTFT 與吞吐量隨佇列狀況起伏，成本降幅則穩定維持。快取在用戶端觀察到的吞吐量增益——也就是「釋出更多 GPU 週期給解碼」的說法——會出現在**專用（dedicated）**端點上，也就是 GPU 由你自己獨佔的情況。DigitalOcean 為 GPU Droplet 提供的 [Inference Optimized Image](https://www.digitalocean.com/community/tutorials/llm-inference-optimization) 正是為此在 vLLM 服務堆疊中加入了自動前綴快取；在專用 Droplet 上量測它的吞吐量差異，是很自然的後續基準測試。若需要一套可完全重現、針對自架 GPU Droplet 的引擎層基準測試框架（含原始命中率與 TTFT 記錄），請見姊妹文章 [When Prompt Caching Actually Pencils Out](https://www.digitalocean.com/community/tutorials/prompt-caching-cost-break-even)。
 
----
+### 語意快取讓重複查詢完全不需要推論
 
-### 語意快取：高重複性工作負載的互補方案
+對於查詢重複率高的工作負載——客戶支援、FAQ 機器人、知識庫搜尋——語意快取可以補足前綴快取，讓常見查詢完全省去整次推論。做法：
 
-對於查詢重複性高的工作負載——客戶支援、FAQ 機器人、知識庫搜尋——語意快取可以與前綴快取互補，對常見查詢徹底消除整次推論。
+1. 每次請求時，先計算進來的查詢的向量嵌入。
+2. 在向量資料庫中查找語意相近的先前查詢（通常是 ≥95% 的 cosine 相似度）。
+3. 若找到相符者，直接回傳快取的回應——不呼叫模型。
+4. 若沒有相符者，執行推論並把結果存起來。
 
-模式如下：
-1. 在每次請求時，計算進來查詢的 embedding
-2. 在向量儲存中查找語意相似的先前查詢（通常 ≥95% 餘弦相似度）
-3. 若找到符合，立即回傳已快取的回應——不呼叫模型
-4. 若無符合，執行推論並儲存結果
+經濟效益很有說服力：一次快取命中的邊際成本接近零（一次嵌入呼叫加一次向量查找）。以一個支援機器人為例，如果 40% 的問題都是「我要怎麼重設密碼」的各種變體，語意快取可以省掉將近一半的推論呼叫。
 
-其經濟效益很有說服力：一次快取命中的邊際成本趨近於零（一次 embedding 呼叫＋一次向量查找）。對一個 40% 問題都是「我要怎麼重設密碼」變體的客服機器人來說，語意快取可以消除將近一半的推論呼叫。
+**什麼時候用它，以及要管理什麼：**
 
-要管理的取捨：
-- **過時（Staleness）：** 已快取的回應需要 TTL 或失效機制。上個月還正確的客服回應，在產品更新後可能就錯了。
-- **門檻調校：** 相似度門檻太高 → 命中很少。太低 → 對不同的查詢回傳了錯誤的回應。95% 餘弦相似度是合理的起點，但要針對你特定的查詢分布來調校。
-- **安全性：** 在多租戶（multi-tenant）部署中，語意快取可能造成資訊外洩風險——如果查詢相似但上下文不同，某位使用者的查詢可能回傳到另一位使用者的已快取回應。請以租戶為命名空間（namespace）來區隔你的快取。
+- **內容過時：** 快取的回應需要 TTL 或失效機制。上個月還正確的回應，在產品更新之後可能就是錯的。
+- **門檻調校：** 相似度門檻設太高，命中很少；設太低，會把不同查詢的錯誤回應回傳出去。95% cosine 相似度是合理的起點——請依你自己的查詢分布去調。
+- **安全性：** 在多租戶部署中，如果查詢相近但脈絡不同，某個使用者的查詢可能回傳另一個使用者的快取回應。請依租戶為快取加上命名空間。
 
----
+### 上線前的陷阱檢查清單
 
-### 常見陷阱檢查清單
+- [ ] 穩定前綴中沒有嵌入任何動態欄位（時間戳記、session ID、使用者 ID、每次請求的中繼資料）。
+- [ ] 取回的文件沿用穩定的提示樣板，但出現在固定前綴之後。
+- [ ] 每個部署都有記錄快取命中率，並用告警加以監控。
+- [ ] 快取 TTL 與你的流量間隔相符——不要在請求間隔 10 分鐘的工作負載上設 5 分鐘。
+- [ ] 多租戶部署中，語意快取項目有依租戶加上命名空間。
+- [ ] 快取寫入成本有分開追蹤——它會部分抵銷讀取的節省。
+- [ ] 你的前綴符合「你實際使用的那個模型版本」的最小可快取長度，而不是套用一般化的「1,024 token」假設——較新的模型可能需要更多。
+- [ ] 提示結構有納入版本控制——不小心改到提示會讓快取無聲失效。
 
-在宣告你的快取實作完成之前，請逐項確認：
+做對的話，三層快取加起來可以讓 60–80% 的推論成本與延遲由快取供應。三者之中只有前綴快取取決於提示結構，這也是為什麼大部分的效益——以及大部分的錯誤——都發生在這一層。
 
-- [ ] 沒有任何動態欄位（時間戳記、session ID、使用者 ID、逐請求中繼資料）嵌在穩定前綴內部
-- [ ] 取回的文件遵循穩定的提示模板，但出現在固定前綴之後
-- [ ] 快取命中率有依部署逐一記錄，並透過警示加以監控
-- [ ] 快取 TTL 與你的流量間隔相符——不會為了一個到達間隔 10 分鐘的工作負載而設成 5 分鐘
-- [ ] 對於多租戶部署，語意快取項目有以租戶為命名空間區隔
-- [ ] 快取寫入成本有單獨追蹤——它們是真實的成本，會部分抵銷讀取所省的錢
-- [ ] 提示結構有納入版本控制——意外的提示變動會悄悄使快取失效
-- [ ] 你的前綴符合**你所使用的那個模型版本**的最小可快取長度，而不是套用通用的「1,024 token」假設——較新的模型可能需要更長
+### 關於這個主題的常見問題
 
----
+#### 1. 什麼是提示快取？它和 KV cache 有什麼不同？
 
-### 常見問題
+KV cache 是自動的，範圍限於單一請求——它讓模型能增量生成 token，而不必在每個解碼步驟都對整個序列從頭重算注意力。提示（前綴）快取則是這個概念的跨請求延伸：當後續請求與先前請求共用相同的開頭 token 時，平台會重用已經算好的 KV 狀態，而不是重新處理一次。KV cache 不需要你設定；前綴快取則需要你設定——做法是把穩定內容放在最前面來建構提示結構。
 
-**什麼是提示快取？它和 KV cache 有什麼不同？**
-KV cache 是自動的，作用範圍在*單一請求內*——它讓模型在生成回應時，不必對已處理過的 token 重算注意力。提示（前綴）快取則把這種重用延伸到*跨獨立請求*，而且與 KV cache 不同的是，它取決於你如何組織提示結構。
+#### 2. 我已經正確啟用快取了，為什麼命中率還是很低？
 
-**我已經正確啟用快取了，為什麼命中率還是很低？**
-幾乎都是因為某個動態欄位——session ID、時間戳記、逐使用者設定——落在你以為是靜態的前綴裡面。快取是以「從第一個 token 起算的完整 token 序列」為鍵，所以第一個差異點就會把前綴截斷。另外兩個常見原因是：前綴低於該模型的最小可快取長度，以及流量太稀疏、撐不到 TTL。
+最常見的原因（而且差距很大）是有一個動態欄位——時間戳記、session ID，或每次請求各自不同的識別碼——落在可快取前綴結束之前的某處。快取是從第一個 token 起以「位元組完全相同」的內容比對，所以快取邊界之前任何一個字元改變，都會讓它之後的一切失效。請把所有每次請求各自不同的內容移到提示的最尾端，也就是被標記的快取邊界之後。
 
-**提示快取會改變模型的輸出嗎？**
-不會。快取前綴重用的是相同 token 已算好的注意力狀態；不論有沒有快取，模型看到的輸入都一樣。快取是成本與延遲的最佳化，不是行為上的改變。
+#### 3. 提示快取會改變模型的輸出嗎？
 
-**到底多長的提示才真的能被快取？**
-取決於模型世代。較舊的 Claude 3.x 最短 1,024–2,048 token 就能快取；Claude Haiku 4.5 則需要 4,096 token。不要假設有一個通用門檻——請查你實際呼叫的那個模型。
+不會。快取只影響輸入前綴在內部如何被處理——平台是重用先前算好的注意力狀態，還是重新計算。回應的生成方式兩者相同，而且各供應商都說明輸出不會因為是否發生快取命中而改變。
 
-**要命中幾次，快取才真的開始省錢？**
-在 1.25× 寫入溢價與 0.10× 讀取費率下，`h* = (w − 1) / (1 − r) = 0.25 / 0.90 ≈ 0.28`——所以只要一次命中就已經划算。在 1 小時 TTL 層級（2× 寫入）下，回本點大約落在 1.2 次命中。
+#### 4. 到底多長的提示才真的能被快取？
 
-**OpenAI 的快取輸入折扣和 Anthropic 一樣嗎？**
-不完全一樣。Anthropic 收取一致的 0.10× 讀取費率；OpenAI 的折扣則隨模型世代不同——過去在 GPT-4o 家族是 50% 折扣，在最新的模型上則接近 90% 折扣。
+這取決於供應商，而在 Anthropic 上還取決於具體的模型世代——沒有單一的通用數字。較舊的 Claude 3.x 最短 1,024–2,048 token 就能快取；較新的模型如 Claude Haiku 4.5 則至少需要 4,096 token。低於這個底線，不論重複多少次、`cache_control` 標記放在哪裡，提示都完全不會被快取。在沿用其他模型或較舊 Claude 世代的數字之前，請先確認你使用的那個模型目前的最低門檻。
 
-**提示快取和語意快取可以一起用嗎？**
-可以，而且兩者互補。前綴快取降低的是「你仍然要送出的那段提示」的成本；語意快取則是對重複查詢直接省掉整個推論呼叫。前綴快取屬於模型層級，語意快取則是你在應用層自行建置的。
+#### 5. 要命中幾次，快取才真的開始省錢？
 
-**把動態欄位搬到結尾，是不是一定能解決低命中率？**
-不一定。它解決的是最常見的那個原因，但無法解決：前綴低於最小可快取長度、流量比 TTL 還稀疏，或是那些「看似穩定」其實不穩定的內容——例如組進了時間戳記、或工具清單順序隨機的系統提示，仍然會 miss。
+以 Anthropic 標準的 5 分鐘級距費率（寫入 1.25×、讀取 0.10×）計算，回本點大約是 1 次快取命中——過了這一次，之後每多一次命中都是淨節省。一般化公式是 `h* = (w − 1) / (1 − r)`，其中 `w` 與 `r` 是你的供應商相對於標準輸入價格的寫入與讀取倍率；代入你自己供應商的費率，就能得到你自己的回本點。
 
----
+#### 6. OpenAI 的快取輸入折扣和 Anthropic 一樣嗎？
 
-### 總結
+不完全一樣。Anthropic 的讀取折扣在整個 Claude 系列都是一致的 90% 折扣（0.10×），寫入溢價則視 TTL 為 1.25× 到 2×。OpenAI 的快取讀取折扣隨模型世代而異——歷史上 GPT-4o 系列是 50% 折扣，在較新的模型上則提高到接近 90% 折扣。請查你使用的那個模型目前的費率，不要假設單一數字適用於 OpenAI 的整個型錄。
 
-提示快取不是一個設定勾選框——它是你提示的一項結構性特質，需要刻意設計。
+#### 7. 提示快取和語意快取可以一起用嗎？
 
-機制：前綴快取會重用跨多個請求中相同開頭 token 所算出的注意力狀態。讀取享 90% 折扣，意味著只要某個前綴再多被讀取一次，這筆帳幾乎總是划算。前提條件是一個讓所有動態內容都接在靜態前綴之後的提示結構。
+可以，而且它們解決的是不同問題，所以是疊加而非競爭。前綴快取降低的是「每次請求都要重新處理共用提示結構」的成本。語意快取則是在進來的查詢與已回答過的查詢語意夠相近時，完全跳過推論。舉例來說，一個支援機器人可以對每次請求的系統提示與工具定義使用前綴快取，同時對那些近乎重複的查詢用語意快取完全短路掉推論。
 
-最常見的單一失敗模式：一個動態欄位嵌在原本靜態的提示中間，使得有效的快取前綴縮減到該欄位之前的那些 token。把那個欄位搬到提示結尾，可以讓一個部署在單次調整中就從 7% 命中率提升到 74%。
+#### 8. 把動態欄位移到提示最後，一定能修好低命中率嗎？
 
-三層快取堆疊：
-1. **KV cache**——自動、在請求內、永遠開啟
-2. **Prefix/prompt cache（前綴／提示快取）**——跨請求、由提示結構控制
-3. **Semantic cache（語意快取）**——應用層、用於高重複性的查詢模式
+它是槓桿效益最高的單一修法，也解決了大多數情況，包括本文開頭那個 ProjectDiscovery 的例子。但如果你的前綴低於供應商的最小可快取長度、你的流量太稀疏以致無法在 TTL 視窗內產生重複命中，或者那段「穩定」內容其實因為其他原因在請求之間並不完全相同（例如樣板裡藏著一個你沒注意到、會微幅變動的欄位），它就幫不上忙。重新排序修的是版面配置問題；它修不了流量樣態或前綴長度的問題。
 
-當這三層都有效運作時，60–80% 的推論成本可以從快取供應——同時降低成本與延遲。
+### 結論
 
----
+提示快取是降低 LLM 成本與延遲的有力工具。它是一個實作起來不太費力的簡單技巧，卻能對你的財務底線產生顯著影響。
 
-*這是「生產環境中的 LLM 推論」五篇系列文章的第 3 篇。[第 1 篇](/blog/zh-llm-bill-3x)介紹 LLM API 成本的隱藏解剖。[第 2 篇](/blog/zh-choosing-the-right-model)介紹模型選擇方法論。[第 4 篇](/blog/zh-full-stack-ai-tco)檢視一整套 AI 堆疊的總體擁有成本。[第 5 篇](/blog/zh-multi-provider-routing)介紹多供應商路由架構。*
+依照本文列出的步驟，你就可以在自己的 LLM 工作負載中導入提示快取，並開始看到成本節省與延遲改善。
 
----
+你可以參考本 **Inference in Production** 系列中的以下文章來入門：
+
+1. [為什麼你的 LLM 帳單是預期的 3 倍](/blog/zh-llm-bill-3x)
+2. [如何為推論使用情境選擇合適的 LLM 模型](/blog/zh-choosing-the-right-model)
+
+#### 後續步驟
+
+- 在你的 LLM 工作負載中導入提示快取。
+- 監控你的快取命中率，並視需要調整 TTL。
+- 嘗試不同的提示結構，找出最適合你工作負載的做法。
 
 ### 參考資料
 
-- [How We Cut LLM Costs by 59% With Prompt Caching](https://projectdiscovery.io/blog/how-we-cut-llm-cost-with-prompt-caching) — ProjectDiscovery
+- [How Does Prompt Caching Work and When Does It Actually Cut LLM Costs?](https://www.digitalocean.com/community/tutorials/prompt-caching-cost-break-even) — DigitalOcean（完整回本推導、逐模型費率表，以及可在自架 GPU Droplet 上重現的引擎層基準測試框架）
+- [How We Cut LLM Costs by 59% With Prompt Caching](https://projectdiscovery.io/blog/how-we-cut-llm-cost-with-prompt-caching) — ProjectDiscovery（生產環境案例）
 - [How GKE Inference Gateway improved latency for Vertex AI](https://cloud.google.com/blog/products/containers-kubernetes/how-gke-inference-gateway-improved-latency-for-vertex-ai) — Google Cloud
+- [Anthropic Prompt Caching documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) — Anthropic
 - [Prefix Caching — LLM Inference Handbook](https://bentoml.com/llm/inference-optimization/prefix-caching) — BentoML
-- [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) — Anthropic
-- [How Does Prompt Caching Work and When Does It Actually Cut LLM Costs?](https://www.digitalocean.com/community/tutorials/prompt-caching-cost-break-even) — DigitalOcean
-- [Using prompt caching](https://docs.digitalocean.com/products/inference/how-to/use-prompt-caching/) — DigitalOcean
+- [Advanced Prompt Caching](https://www.digitalocean.com/blog/advanced-prompt-caching) — DigitalOcean
 - [LLM Inference Optimization](https://www.digitalocean.com/community/tutorials/llm-inference-optimization) — DigitalOcean
-- [Advanced prompt caching](https://www.digitalocean.com/blog/advanced-prompt-caching) — DigitalOcean
+- [Serverless vs. Dedicated vs. Self-Hosted LLM Inference: When Self-Hosting Actually Gets Cheaper](https://www.digitalocean.com/community/tutorials/serverless-vs-dedicated-vs-self-hosted-llm-inference-cost) — DigitalOcean
+
+---
+
+*這是「生產環境中的 LLM 推論」系列 5 篇文章中的第 3 篇。[第 1 篇](/blog/zh-llm-bill-3x)談 LLM API 成本的隱藏解剖。[第 2 篇](/blog/zh-choosing-the-right-model)談模型選擇方法論。[第 4 篇](/blog/zh-multi-provider-routing)談多供應商路由架構。[第 5 篇](/blog/zh-full-stack-ai-tco)檢視整套 AI stack 的總持有成本。*

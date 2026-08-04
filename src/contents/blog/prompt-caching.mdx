@@ -1,310 +1,251 @@
 ---
 title: 'Prompt Caching in Practice — From 7% to 74% Hit Rate'
-description: 'Prompt caching is the single highest-leverage cost and latency optimization most teams haven''t fully exploited. Here''s the mechanics, the economics, and the step-by-step path from single-digit hit rates to 60-80% — including the one mistake that ruins caching for most deployments.'
+description: 'Prompt caching is the highest-leverage cost and latency optimization most teams haven''t fully exploited. The mechanics, the economics, and the step-by-step path from single-digit hit rates to 60–80% — with a first-hand DigitalOcean serverless benchmark and the one layout mistake that ruins caching.'
 banner: 'prompt-caching-banner'
 publishedAt: '2026-07-24'
 tags: 'ai-ml,gen-ai,llm,cost-optimization,prompt-engineering'
 ---
 > *Disclosure: I'm a Solutions Architect at DigitalOcean, so when I mention DigitalOcean products it's an informed-insider view, not a neutral one — I flag those moments clearly and keep the analysis vendor-neutral wherever the topic allows. The opinions here are my own.*
 
-*Prompt-caching mechanics plus a first-hand measurement on DigitalOcean Serverless (Anthropic-style explicit `cache_control`). The mechanics apply across providers; the DigitalOcean numbers come from a documented benchmark, not marketing.*
+*A version of this article was published on the [DigitalOcean Community](https://www.digitalocean.com/community/conceptual-articles/prompt-caching-in-practice-hit-rate).*
 
-### Introduction
+*Prompt-caching mechanics plus a first-hand measurement on DigitalOcean Serverless (Anthropic-style explicit `cache_control`). The mechanics apply across providers; DigitalOcean numbers come from a documented benchmark, not marketing.*
 
-A security intelligence team was running an AI agent at scale. Every time their agent analyzed a new threat, it sent a prompt containing the same 4,000-token system instruction, the same tool definitions, the same analysis framework — followed by the specific threat data to evaluate. Their prompt cache hit rate: **7%**.
+Prompt caching is the highest-leverage cost lever most production LLM teams have configured but aren't actually benefiting from. [A documented production case from ProjectDiscovery](https://projectdiscovery.io/blog/how-we-cut-llm-cost-with-prompt-caching) shows both the failure mode and the fix: a security-intelligence agent sent the same 4,000-token system instruction, tool definitions, and analysis framework on every request, followed by the specific threat data to evaluate — and still ran a **7%** cache hit rate. One structural change, moving a single dynamic identifier from the middle of the prompt to the end, took the hit rate to **74%** and cut the monthly inference bill 59%.
 
-They made one structural change: moved a single dynamic identifier from the middle of the prompt to the end. Their hit rate jumped to **74%** — and stayed there. Their monthly inference bill dropped by 59%.
+The pattern is common: caching is configured correctly in principle, but one dynamic field in the wrong position breaks the entire prefix. This article covers how prompt caching actually works, why most implementations get it wrong, and the concrete steps from single-digit hit rates to the 60–80% range achievable in production.
 
-[This is a documented production case](https://projectdiscovery.io/blog/how-we-cut-llm-cost-with-prompt-caching), not a theoretical optimization. And it represents one of the most common patterns in production LLM deployments: teams that have prompt caching configured correctly in principle but are getting almost none of the benefit — because one dynamic field in the wrong position breaks the entire cache.
+### TL;DR
 
-This article explains how prompt caching actually works, why most implementations get it wrong, and the concrete steps to move from single-digit hit rates to the 60–80% range that's achievable in production.
+- **Prompt caching is the single highest-leverage cost lever for agentic and multi-turn workloads — if the prefix is structured correctly.** One production case (ProjectDiscovery) took cache hit rate from 7% to 74% with a single reordering fix, cutting inference cost 59%.
+- **Three different caches solve three different problems:** KV cache (automatic, inside a single request), prefix cache (cross-request, the subject of this piece), and semantic cache (application-layer, for semantically similar repeat queries, not exact matches).
+- **The cache is keyed on exact, byte-identical prefix content.** One dynamic field — a timestamp, a session ID, per-user data — placed *before* the cache boundary invalidates the entire prefix behind it, not just that field.
+- **Anthropic-style explicit caching breaks even after about 1 cache hit** at standard rates (1.25x write, 0.10x read); every hit after that is pure savings. OpenAI's cached-read discount varies by model generation — historically 50% off, moving toward 90% off on its newest models — so check the rate for your specific model rather than assuming one number.
+- **Minimum cacheable prefix length varies by model and generation.** Older Claude 3.x models cache prefixes as short as 1,024–2,048 tokens; newer models like Claude Haiku 4.5 require 4,096 tokens. Don't assume a single threshold applies across every model version.
+- **Firsthand on DigitalOcean Serverless** (Claude Haiku 4.5, ~6,000-token prefix): moving one dynamic field out of the cached prefix took the hit rate from 0% to 99.3% and cut input cost by roughly 90%.
+- **Google's Vertex AI team doubled prefix cache hit rate from 35% to 70%** with cache-aware routing — cutting TTFT 35% on context-heavy coding-agent workloads and P95 tail latency 52% on bursty chat workloads (two distinct traffic profiles, not the same one measured twice).
 
-### Key Takeaways
+### KV, prefix, and semantic caching solve three different problems
 
-* Prompt caching is the single highest-leverage cost *and* latency optimization most teams haven't fully exploited.
-* There are three distinct caches, often confused: KV (automatic, within a request), prefix/prompt (cross-request, **you control it via prompt structure**), and semantic (application-layer, for repeated queries).
-* Cache reads cost ~10% of the input rate (a 90% discount); at a 1.25× write premium you break even after about **one** cache hit, so caching almost always pays off.
-* There's a minimum cacheable prefix length, and it moves with the model generation: older Claude 3.x models cache prefixes as short as 1,024–2,048 tokens, while Claude Haiku 4.5 requires 4,096.
-* The #1 failure mode: a dynamic field (timestamp, session ID) embedded in an otherwise static prompt breaks the whole prefix — one team went from 7% to 74% hit rate by moving a single field to the end.
-* Put all static content first, all dynamic content last, and track cache hit rate as a first-class metric. 60–80% is realistic — and it cuts latency, not just cost.
+"Caching" means three different things in the LLM inference context, and confusing them leads to misplaced optimization effort:
 
----
+**1. KV cache — automatic, inside a single request.** When a model generates a response, it computes key-value attention states for each input token. Without a KV cache, each decode step would recompute attention over all previous tokens. The KV cache stores these states so decoding is incremental. It is always on, requires no configuration, and speeds up generation within a single request. You don't control it; you benefit from it automatically.
 
-### The Three Caches You Need to Understand
+**2. Prompt cache (prefix cache) — cross-request, controlled by you.** Prefix caching extends the KV cache concept across multiple independent requests. When requests share the same leading tokens — the same system prompt, the same few-shot examples, the same reference documents — the model reuses the computed KV states from the first request instead of recomputing them on every call. This is the cache the rest of this article is about. The stable leading tokens are the cacheable prefix; the per-request content is the dynamic tail.
 
-"Caching" means three different things in the LLM inference context, and confusing them leads to misplaced optimization effort. Here's a clear taxonomy:
+**3. Semantic cache — application layer, separate system.** Semantic caching stores complete input-output pairs and retrieves them when a new query is semantically similar to a previous one, based on embedding similarity. This is not a model-level feature — it's a pattern you implement in your application layer using a vector store. It is complementary to prompt caching, not a replacement.
 
-**1. KV Cache** — happens automatically, inside a single request
-
-When a model generates a response, it computes key-value attention states for each input token. Without a KV cache, each decode step would recompute attention over all previous tokens. The KV cache stores these states so decoding is incremental. This is always on, requires no configuration, and speeds up response generation within a single request. You don't control it; you benefit from it automatically.
-
-Think of this like a translator who writes notes as they work through a document — they don't re-read the first paragraph every time they translate the fifth.
-
-**2. Prompt Cache (Prefix Cache)** — cross-request, controlled by you
-
-Prefix caching extends the KV cache concept across multiple independent requests. When multiple requests share the same leading tokens — the same system prompt, the same few-shot examples, the same reference documents — the model reuses the computed KV states from the first request instead of recomputing them on every call.
-
-This is the cache described in the rest of this article. It requires you to structure your prompts correctly. When it works, it's the single biggest cost lever available.
-
-Think of a teacher who has prepared detailed lesson notes once. Every time a new student asks a question, the teacher doesn't re-read the entire curriculum from scratch — they pull from the prepared notes and only process the specific new question. The notes are the cacheable prefix; the student's question is the dynamic tail.
-
-**3. Semantic Cache** — application-layer, separate system
-
-Semantic caching stores complete input-output pairs and retrieves them when a new query is semantically similar to a previous one, based on embedding similarity. This is not a model-level feature — it's a pattern you implement in your application layer using a vector store.
-
-Semantic caching is complementary to prompt caching, not a replacement. It excels for high-repetition FAQ-style queries (a support chatbot where 40% of questions are "how do I reset my password"). It requires an embedding model, a vector store, and careful management of cache staleness. The threshold question — how similar is similar enough to return the cached response? — is typically set around 95% cosine similarity, and tuning it is a tradeoff between precision and hit rate.
+You can read more on [Prompt Caching](https://www.digitalocean.com/community/tutorials/prompt-caching-explained).
 
 ![Three caches compared: KV within a request, prefix across requests, and semantic at the application layer](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Prompt-Caching-Jeff/Screenshot%202026-07-24%20at%2011.52.37%E2%80%AFAM.png)
 
 *Three different caches at three different layers: KV (automatic, within a request), prefix (cross-request, controlled by prompt structure), and semantic (application-layer, for repeat queries).*
 
----
+### Cache reads cost 10% of input; the write premium pays back after about 1 hit
 
-### The Economics of Prefix Caching
+The economics are what make prefix caching the dominant cost optimization.
 
-The numbers that make prefix caching the dominant cost optimization:
+On [Anthropic (Claude)](https://platform.claude.com/docs/en/build-with-claude/prompt-caching), a cache write costs **1.25× the base input rate** (5-minute TTL) or **2× the base input rate** (1-hour TTL); a cache read costs **0.10× the base input rate — a 90% discount**. On Claude Sonnet 4.6 at $3.00/M input tokens, you pay $3.75/M to write a cache entry for a 5-minute window and $0.30/M every time you read it. If a cached prefix is read 10 times before it expires, you've paid $3.75 once and $0.30 × 10 = $3.00 for reads — versus $3.00 × 11 = $33.00 without caching. That is an 80% reduction on that prefix for a modest hit count.
 
-**Anthropic (Claude):**
-- Cache write: **1.25× base input rate** (5-minute TTL) or **2× base input rate** (1-hour TTL)
-- Cache read: **0.10× base input rate** — a **90% discount**
+OpenAI's cached-input discount is not a fixed number across its catalogue — it varies by model generation. Historically it sat at 50% off for the GPT-4o family; on OpenAI's newest models the discount has moved up toward 90% off, the same 0.10x read rate Anthropic charges. Check the rate for the specific model you're calling rather than assuming one figure applies across every OpenAI model. DigitalOcean's companion piece, [When Prompt Caching Actually Pencils Out](https://www.digitalocean.com/community/tutorials/prompt-caching-cost-break-even), has a full per-model rate table for Anthropic, OpenAI, and open-source models on DigitalOcean's own pricing page, and is worth reading alongside this one.
 
-On Claude Sonnet 4.6 at $3.00/M input tokens: you pay $3.75/M to write a cache entry for a 5-minute window, and $0.30/M every time you read from it. If a cached prefix is read 10 times before it expires, you've paid $3.75 once and $0.30 × 10 = $3.00 for reads — versus $3.00 × 11 = $33.00 without caching. That's an 80% cost reduction on that prefix for a modest hit count.
+The write cost is the variable to understand. Caching isn't free — you pay a premium on the first request that populates the cache, and the math only works if subsequent requests hit it often enough. The general break-even point is `h* = (w − 1) / (1 − r)`, where `w` is the write multiplier and `r` is the read multiplier. At Anthropic's 5-minute-tier rates (`w = 1.25`, `r = 0.10`), that gives `h* = 0.25 / 0.90 ≈ 0.28`, which rounds up to **just 1 cache hit** — after that single hit, every subsequent hit is pure savings. You can check this directly against the worked numbers above: at exactly 1 hit (2 total requests), caching costs $3.75 + $0.30 = $4.05, against $3.00 × 2 = $6.00 without caching — already cheaper. For a system prompt sent with every request, payback is effectively instant. For a large document referenced only a few times, calculate whether the read savings justify the write cost. For the full derivation and worked examples across every rate tier DigitalOcean supports, see the companion piece linked above.
 
-**OpenAI:** the cached-input discount is *not* a single number across the catalogue — it varies by model generation. Historically it sat at 50% off for the GPT-4o family; on OpenAI's newest models it has moved toward 90% off, the same 0.10× read rate Anthropic charges. Check the rate for the specific model you're calling rather than assuming a catalogue-wide discount.
+**When prefix caching helps — and when it doesn't:**
 
-The write cost is the key variable to understand. It means caching isn't free — you pay a premium on the first request that populates the cache. The math only works in your favor if subsequent requests hit the cache frequently enough. For a system prompt that's sent with every request, the payback is almost instantaneous. For a large document that's only referenced a few times, you need to calculate whether the read savings justify the write cost.
+- **Helps:** a large stable prefix (system prompt + tool definitions + few-shot + RAG template) reused across many requests within the TTL window. The bigger and more-reused the prefix, the larger the win.
+- **Doesn't:** prefixes below the provider's minimum cacheable length. On DigitalOcean serverless, prefixes under ~4,000 tokens didn't cache for us — consistent with Anthropic's current 4,096-token minimum for newer models like Claude Haiku 4.5. That minimum isn't universal across every Claude generation, though: older Claude 3.x models cache prefixes as short as 1,024–2,048 tokens. Check the minimum for your specific model version — don't assume one threshold applies everywhere — and see the companion piece above for a per-model reference table. Caching also doesn't help on low-reuse prefixes where the 1.25–2× write premium never amortizes, or low-traffic endpoints whose request inter-arrival time exceeds the TTL.
 
-The crossover point has a closed form. With a write premium `w` and a read rate `r` (both as multiples of the base input rate), the number of hits needed to break even is:
+### A dynamic field in the prefix drops hit rate to single digits
 
-```
-h* = (w − 1) / (1 − r)
-```
+This is the mistake made by the ProjectDiscovery team above, and by a large majority of teams implementing caching for the first time.
 
-At Anthropic's 5-minute tier (`w = 1.25`, `r = 0.10`): `h* = 0.25 / 0.90 ≈ 0.28` — which rounds up to **just one cache hit**. Check it directly: at exactly 1 hit (2 total requests) caching costs $3.75 + $0.30 = **$4.05**, against $3.00 × 2 = **$6.00** without caching. Already cheaper. Every subsequent hit is pure savings.
+**The prefix cache requires bit-for-bit identical content from the beginning of the prompt.** The cache is keyed on the exact token sequence starting from the first token. Any change — any character, any field that varies between requests — resets the cache boundary at that point.
 
-**When prefix caching helps — and when it doesn't**
-
-- **Helps:** a stable system prompt, tool definitions, or reference documents sent with most requests; bursty traffic where many requests share a prefix inside one TTL window; prefixes comfortably above your model's minimum cacheable length.
-- **Doesn't:** low-reuse prefixes where the 1.25–2× write premium never amortizes; low-traffic endpoints whose request inter-arrival time exceeds the TTL; and prefixes below the minimum cacheable length — older Claude 3.x models cache from 1,024–2,048 tokens, but newer models like Claude Haiku 4.5 require 4,096, so a "short but stable" prefix may never cache at all.
-
----
-
-### Why Most Prompt Cache Implementations Fail
-
-This is the mistake made by the security team in the introduction, and by a large majority of teams implementing caching for the first time:
-
-**The prefix cache requires bit-for-bit identical content from the beginning of the prompt.** The cache is keyed on the exact token sequence starting from the first token. Any change — any character change, any field that varies between requests — resets the cache boundary at that point.
-
-Imagine a template where the first part is static (system instructions, tool definitions) and somewhere in the middle there's a `session_id` or a `timestamp` or a per-user configuration field that changes on every request. Even though 90% of the prompt content is identical, the cache only covers the tokens up to the first difference. Everything after that point is recomputed from scratch on every request.
+Take a template where the first part is static (system instructions, tool definitions) and somewhere in the middle there's a `session_id`, a `timestamp`, or a per-user configuration field that changes on every request. Even though 90% of the prompt is identical, the cache only covers the tokens up to the first difference. Everything after that point is recomputed from scratch on every request.
 
 ![Stable versus broken prefix layout: with the dynamic field at the tail the whole prefix stays cached; with it in the middle the cache collapses at that point](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Prompt-Caching-Jeff/Screenshot%202026-07-24%20at%2011.52.52%E2%80%AFAM.png)
 
 *Same content, one field moved. Stable layout: the dynamic field sits at the tail, so the entire prefix stays cacheable. Broken layout: the field sits mid-prefix, and everything after it is recomputed on every request.*
 
-This is why the security team's hit rate was 7%: they had a dynamic field — a threat identifier — embedded in the middle of their otherwise stable prompt template. The system prompt, all the analysis instructions, all the tool definitions were being recomputed every time because that one identifier broke the prefix match.
+That is why the security team's hit rate was 7%: a dynamic threat identifier sat in the middle of an otherwise stable template, so the system prompt, analysis instructions, and tool definitions were recomputed every time. Moving the identifier to the end — after all the stable content — restored the full prefix for caching and took the hit rate from 7% to 74% in a single deployment.
 
-Moving the identifier to the end of the prompt — after all the stable content — restored the full prefix for caching. Hit rate went from 7% to 74% in a single deployment.
+### Four steps from single-digit to 60–80% hit rate
 
----
+**Step 1: Identify your stable prefix.** Map your prompt structure and categorize every component:
 
-### The Step-by-Step Optimization Path
+| Component                   | Stable?    | Examples                                    |
+| --------------------------- | ---------- | ------------------------------------------- |
+| System prompt / persona     | Yes        | "You are a helpful assistant…"              |
+| Tool / function definitions | Yes        | Full tool schemas                           |
+| Few-shot examples           | Yes        | Static examples                             |
+| RAG context template        | Mostly yes | Document format, section headers            |
+| Retrieved documents         | Depends    | Same docs = cacheable; per-query docs = not |
+| User query                  | No         | Changes every request                       |
+| Session variables           | No         | User ID, conversation ID, timestamps        |
+| Per-request metadata        | No         | Request-specific context                    |
 
-**Step 1: Identify your stable prefix**
+Your cacheable prefix is the longest leading sequence that stays identical across the majority of requests — typically the system prompt, tool definitions, and fixed few-shot examples, or 1,000–8,000 tokens of stable content.
 
-Map your prompt structure. Categorize every component:
+**Step 2: Move all dynamic content to the end.** Restructure so the stable prefix comes first, uninterrupted, and all dynamic content follows at the end. Production prompts accumulate dynamic fields organically — a session ID added here, a user preference injected there — and each insertion silently kills caching. The target structure:
 
-| Component | Stable? | Examples |
-|-----------|---------|---------|
-| System prompt / persona | Yes | "You are a helpful assistant..." |
-| Tool / function definitions | Yes | Full tool schemas |
-| Few-shot examples | Yes | Static examples |
-| RAG context template | Mostly yes | Document format, section headers |
-| Retrieved documents | Depends | Same docs = cacheable; per-query docs = not |
-| User query | No | Changes every request |
-| Session variables | No | User ID, conversation ID, timestamps |
-| Per-request metadata | No | Request-specific context |
-
-Your cacheable prefix is the longest leading sequence that stays identical across the majority of your requests. In most deployments, this includes the system prompt, tool definitions, and any fixed few-shot examples — typically 1,000–8,000 tokens of stable content.
-
-**Step 2: Move all dynamic content to the end**
-
-Restructure your prompt so the stable prefix comes first, uninterrupted, and all dynamic content follows at the end. This sounds obvious, but production prompts often accumulate dynamic fields organically — a session ID added here, a user preference injected there — and these insertions silently kill caching.
-
-The target structure:
-```
+```bash
 [System instructions — fully static]
-[Tool definitions — fully static]  
+[Tool definitions — fully static]
 [Few-shot examples — fully static]
 [Retrieved context — stable template, variable content]
 [User query — dynamic]
 [Session metadata — dynamic, at the very end]
 ```
 
-Concretely, with an Anthropic-style `cache_control` breakpoint, this is the difference between a prompt that never caches and one that almost always does:
+Concretely, in the Anthropic-style `cache_control` API that [DigitalOcean serverless](https://docs.digitalocean.com/products/inference/how-to/use-prompt-caching/) exposes, the trap is a value that changes every request (a session id, a timestamp) sitting inside the marked prefix, and the fix is to move it out of `system` into the user turn:
 
 ```json
-// BROKEN — session id sits inside the cached system block.
-// Every request writes a new cache entry. Measured: 0% hit.
-{
-  "system": [
-    {
-      "type": "text",
-      "text": "You are a threat analyst...\nSession: 8f3c-2201-aa19",
-      "cache_control": { "type": "ephemeral" }
-    }
-  ],
-  "messages": [{ "role": "user", "content": "Analyze this indicator..." }]
-}
+// The session id is DIFFERENT on every request — watch where it sits.
 
-// FIXED — the static prefix is cached; the session id moves to the user turn.
-// Measured: ~99% hit.
+// BROKEN — id inside the cached system block:
 {
-  "system": [
-    {
-      "type": "text",
-      "text": "You are a threat analyst...",
-      "cache_control": { "type": "ephemeral" }
-    }
-  ],
-  "messages": [
-    {
-      "role": "user",
-      "content": "Analyze this indicator...\nSession: 8f3c-2201-aa19"
-    }
-  ]
+  "system": [{
+    "type": "text",
+    "text": "Session 4f9a-2c1e. You are a support agent. [ …600 lines of stable policy… ]",
+    "cache_control": {"type": "ephemeral"}
+  }],
+  "messages": [{"role": "user", "content": "How do I reset my password?"}]
 }
+// The next request carries "Session 7b3d-9f02…", so the system text is never
+// byte-identical twice — the whole prefix is recomputed. Measured: 0% hit.
+
+// FIXED — id moved to the user turn; system stays byte-identical:
+{
+  "system": [{
+    "type": "text",
+    "text": "You are a support agent. [ …600 lines of stable policy… ]",
+    "cache_control": {"type": "ephemeral"}
+  }],
+  "messages": [{"role": "user", "content": "Session 4f9a-2c1e. How do I reset my password?"}]
+}
+// The changing id now rides after the breakpoint, so the 600-line prefix
+// caches on every later request. Measured: ~99% hit.
 ```
 
-See DigitalOcean's [prompt caching how-to](https://docs.digitalocean.com/products/inference/how-to/use-prompt-caching/) for the exact request format.
+**Step 3: Monitor cache hit rate as a first-class metric.** Cache hit rate belongs on your LLM operations dashboard alongside latency and cost. It's a leading indicator: a drop often precedes a cost spike, and it surfaces prompt-structure regressions before they become billing surprises. Most provider APIs return cache usage in response metadata — log it, alert on it.
 
-**Step 3: Monitor cache hit rate as a first-class metric**
+**Step 4: Match cache TTL to your traffic interval.** Anthropic's TTL options (5 minutes or 1 hour) are operational constraints, not just pricing tiers. A deployment with requests every 10 minutes will never hit the 5-minute tier — choose TTL based on your expected request interval at p50, not the burst peak. For bursty workloads (a daily batch that processes thousands of requests in an hour, then goes quiet), the 1-hour TTL wins even at 2× write cost: the write is paid once per hour, and read savings accumulate across the burst.
 
-Cache hit rate should appear on your LLM operations dashboard alongside latency and cost. It's a leading indicator: a drop in hit rate often precedes a cost spike, and it surfaces prompt structure regressions before they become billing surprises.
+### Cache-aware routing cut TTFT 35% and P95 latency 52% on two different Vertex AI workloads
 
-Most provider APIs return cache usage in response metadata. Log it. Alert on it.
+The cost savings from prompt caching are well-documented. The latency impact is less discussed and can be equally significant.
 
-**Step 4: Understand cache TTL and plan around it**
+[Google's Vertex AI team documented](https://cloud.google.com/blog/products/containers-kubernetes/how-gke-inference-gateway-improved-latency-for-vertex-ai) that intelligent routing — sending requests with shared prefixes to the same inference server that already has the prefix cached — doubled their prefix cache hit rate from 35% to 70%. Google reports this cut TTFT by **35% on context-heavy coding-agent workloads** (Qwen3-Coder) and improved **P95 tail latency by 52% on bursty chat workloads** (DeepSeek V3.1). Those are two distinct traffic profiles with different bottlenecks — context-heavy workloads are bound by re-computation overhead, bursty workloads by queue congestion — not the same workload measured two different ways.
 
-Anthropic's cache TTL options (5 minutes or 1 hour) are not just pricing tiers — they're operational constraints. A low-traffic deployment where requests come in every 10 minutes will never see cache hits on the 5-minute TTL tier. Choose your TTL based on your expected request interval at the p50, not the burst peak.
+The mechanism: cache hits eliminate the prefill computation for the stable portion of the prompt. For a prompt where 4,000 of 4,500 tokens are cached, the model runs prefill on only 500 new tokens — roughly an 89% reduction in prefill work. Prefill is compute-intensive; skipping it is a meaningful latency win, not just a cost saving.
 
-For workloads with bursty traffic patterns (a daily batch run that processes thousands of requests in an hour, then goes quiet), the math strongly favors the 1-hour TTL even at 2× write cost — the write cost is paid once per hour, and the read savings accumulate across the burst.
+### First-hand on DigitalOcean Serverless: 0% to 99.3% hit rate, ~90% lower input cost
 
----
+To put numbers to this rather than quote a vendor figure, we benchmarked [DigitalOcean Serverless Inference](https://docs.digitalocean.com/products/inference/details/pricing/#serverless-inference) directly (Claude Haiku 4.5 at **$1.00/M input, $5.00/M output**, a ~6,000-token shared prefix, 1,500 requests per layout across 3 runs). Two findings worth internalizing:
 
-### Production Validation: What 70% Cache Hit Rates Do to Latency
+**First, caching here is explicit, not automatic.** DigitalOcean serverless uses the Anthropic-style model: you mark the stable prefix with an ephemeral [`cache_control`](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) breakpoint. Without that marker, the hit rate is **0%** no matter how cleanly the prompt is structured — and there's a minimum cacheable length (a ~2,300-token prefix didn't cache; ~6,000 did, consistent with the 4,096-token minimum for this model noted above). This is the 5-minute / 1-hour TTL mechanism described earlier, not vLLM's automatic prefix caching.
 
-The cost savings from prompt caching are well-documented. Less discussed is the latency impact, which can be equally significant.
-
-[Google's Vertex AI team documented](https://cloud.google.com/blog/products/containers-kubernetes/how-gke-inference-gateway-improved-latency-for-vertex-ai) that intelligent routing — which ensures requests with shared prefixes land on the same inference server that already has the prefix cached — doubled their prefix cache hit rate from 35% to 70%. The result: **TTFT cut by 35%** on context-heavy coding-agent workloads (Qwen3-Coder), and **P95 tail latency improved by 52%** on bursty chat workloads (DeepSeek V3.1). Those are two distinct traffic profiles with different bottlenecks — context-heavy workloads are bound by re-computation overhead, bursty workloads by queue congestion — not the same workload measured two different ways.
-
-The mechanism: cache hits eliminate the prefill computation cost for the stable portion of the prompt. For a prompt where 4,000 of 4,500 tokens are cached, the model only runs prefill on 500 new tokens — roughly an 89% reduction in prefill work. Prefill is compute-intensive; skipping it is a meaningful latency win, not just a cost saving.
-
-### First-Hand Measurement: Prompt Caching on DigitalOcean Serverless
-
-To put numbers to this rather than quote a vendor figure, we benchmarked [DigitalOcean's serverless inference endpoint](https://docs.digitalocean.com/products/inference/details/pricing/#serverless-inference) directly (Claude Haiku 4.5 at $1.00/M input, $5.00/M output, a ~6,000-token shared prefix, 1,500 requests per layout across 3 runs). Two findings worth internalizing:
-
-**First, caching here is explicit, not automatic.** DigitalOcean serverless uses the Anthropic-style model: you mark the stable prefix with an ephemeral `cache_control` breakpoint. Without that marker, the cache hit rate is **0%** no matter how cleanly your prompt is structured — and there's a minimum cacheable length (a ~2,300-token prefix didn't cache; ~6,000 did, consistent with the 4,096-token minimum for this model noted above — prefixes under ~4,000 tokens didn't cache for us at all). This is the 5-minute / 1-hour TTL mechanism described earlier, not vLLM's automatic prefix caching.
-
-**Second, with the prefix correctly marked, the layout effect is dramatic.** Holding the model and token count constant and only moving the per-request dynamic field — from inside the prefix to the tail — the measured cache hit rate went from **0% to 99.3%**, and estimated input cost dropped from **$6.72 to $0.57 per 1,000 requests — roughly a 90% reduction**. That's in the range the 90%-off cache-read economics would predict: when 99% of your input is served from cache at 0.1× the rate, your input bill falls by roughly an order of magnitude. (Our measured reduction runs a few points above the simplest back-of-envelope estimate from hit rate and discount alone; if you reproduce this benchmark, treat the exact percentage as directional rather than a number to plan a budget around, and measure your own traffic shape instead.)
+**Second, with the prefix correctly marked, the layout effect is dramatic.** Holding the model and token count constant and only moving the per-request dynamic field from inside the prefix to the tail, the measured cache hit rate went from **0% to 99.3%**, and estimated input cost dropped from **$6.72 to $0.57 per 1,000 requests — roughly a 90% reduction**. That's in the range the 90%-off cache-read economics would predict: when nearly all input is served from cache at 0.1× the rate, the input bill falls by roughly an order of magnitude. (Our measured reduction runs a few points above the simplest back-of-envelope estimate from hit rate and discount alone; if you reproduce this benchmark, treat the exact percentage as directional rather than a number to plan a budget around, and measure your own traffic shape instead.)
 
 ![DigitalOcean serverless prompt-caching benchmark: cache hit rate 0% to 99.3% and input cost $6.72 to $0.57 per 1,000 requests when the dynamic field moves out of the cached prefix](https://doimages.nyc3.cdn.digitaloceanspaces.com/006Community/2026-Community-Tutorials-Anish/Solutions-Engineering/Prompt-Caching-Jeff/Screenshot%202026-07-24%20at%2011.53.32%E2%80%AFAM.png)
 
 *First-hand on DigitalOcean serverless (Claude Haiku 4.5, ~6,000-token prefix, 1,500 requests per layout): marking the prefix with `cache_control` and moving the dynamic field to the tail took the hit rate from 0% to 99.3% and cut input cost roughly 90% ($6.72 → $0.57 per 1,000 requests).*
 
-One honest caveat from the data: on shared serverless, the *reproducible* win is **cost**, not throughput. Across runs, TTFT and throughput fluctuated with queue conditions while the cost reduction held steady. Client-observed throughput gains from caching — the "more GPU cycles freed for decode" story — show up on a **dedicated** endpoint, where you own the GPU. DigitalOcean's [Inference Optimized Image](https://www.digitalocean.com/community/tutorials/llm-inference-optimization) for GPU Droplets layers automatic prefix caching into a vLLM serving stack for exactly that case; measuring its throughput delta on a dedicated Droplet is the natural follow-up benchmark.
+One honest caveat from the data: on shared serverless, the *reproducible* win is **cost, not throughput**. Across runs, TTFT and throughput fluctuated with queue conditions while the cost reduction held steady. Client-observed throughput gains from caching — the "more GPU cycles freed for decode" story — show up on a **dedicated** endpoint, where you own the GPU. DigitalOcean's [Inference Optimized Image](https://www.digitalocean.com/community/tutorials/llm-inference-optimization) for GPU Droplets layers automatic prefix caching into a vLLM serving stack for exactly that case; measuring its throughput delta on a dedicated Droplet is the natural follow-up benchmark. For a fully reproducible, engine-level benchmark harness against a self-hosted GPU Droplet (including raw hit-rate and TTFT logs), see the companion piece, [When Prompt Caching Actually Pencils Out](https://www.digitalocean.com/community/tutorials/prompt-caching-cost-break-even).
 
----
+### Semantic caching eliminates inference entirely for repeat queries
 
-### Semantic Caching: The Complement for High-Repetition Workloads
+For workloads with high query repetition — customer support, FAQ bots, knowledge-base search — semantic caching complements prefix caching by eliminating full inference for common queries. The pattern:
 
-For workloads with high query repetition — customer support, FAQ bots, knowledge base search — semantic caching can complement prefix caching to eliminate full inference entirely for common queries.
-
-The pattern:
-1. On each request, compute an embedding of the incoming query
-2. Check the vector store for semantically similar previous queries (typically ≥95% cosine similarity)
-3. If a match is found, return the cached response immediately — no model call
-4. If no match, run inference and store the result
+1. On each request, compute an embedding of the incoming query.
+2. Check the vector store for semantically similar previous queries (typically ≥95% cosine similarity).
+3. If a match is found, return the cached response immediately — no model call.
+4. If no match, run inference and store the result.
 
 The economics are compelling: a cache hit has near-zero marginal cost (one embedding call + one vector lookup). For a support bot where 40% of questions are variations of "how do I reset my password," semantic caching can eliminate nearly half of all inference calls.
 
-The tradeoffs to manage:
-- **Staleness:** Cached responses need a TTL or invalidation mechanism. A support response that was accurate last month may be wrong after a product update.
-- **Threshold tuning:** Too high a similarity threshold → few hits. Too low → wrong responses returned for different queries. 95% cosine similarity is a reasonable starting point, but tune it against your specific query distribution.
-- **Security:** Semantic caching can create information leakage risks in multi-tenant deployments — one user's query might return another user's cached response if queries are similar but contexts differ. Namespace your cache by tenant.
+**When to use it and what to manage:**
 
----
+- **Staleness:** cached responses need a TTL or invalidation mechanism. A response accurate last month may be wrong after a product update.
+- **Threshold tuning:** too high a similarity threshold yields few hits; too low returns wrong responses for different queries. 95% cosine similarity is a reasonable starting point — tune it against your query distribution.
+- **Security:** in multi-tenant deployments, one user's query can return another user's cached response if queries are similar but contexts differ. Namespace the cache by tenant.
 
-### The Common Pitfalls Checklist
+### Pitfalls checklist before you ship
 
-Before declaring your caching implementation complete, verify:
+- [ ] No dynamic fields (timestamps, session IDs, user IDs, per-request metadata) are embedded inside the stable prefix.
+- [ ] Retrieved documents follow the stable prompt template but appear after the fixed prefix.
+- [ ] Cache hit rate is logged per deployment and monitored using alerting.
+- [ ] Cache TTL is matched to your traffic interval — not set to 5 minutes for a workload with 10-minute inter-arrival times.
+- [ ] For multi-tenant deployments, semantic cache entries are namespaced by tenant.
+- [ ] Cache write costs are tracked separately — they partially offset read savings.
+- [ ] Your prefix meets the minimum cacheable length for your specific model version, not a generic "1,024 tokens" assumption — newer models can require more.
+- [ ] Prompt structure is version-controlled — accidental prompt changes invalidate the cache silently.
 
-- [ ] No dynamic fields (timestamps, session IDs, user IDs, per-request metadata) are embedded inside the stable prefix
-- [ ] Retrieved documents follow the stable prompt template but appear after the fixed prefix
-- [ ] Cache hit rate is logged per deployment and monitored via alerting
-- [ ] Cache TTL is matched to your traffic interval — not set to 5 minutes for a workload with 10-minute inter-arrival times
-- [ ] For multi-tenant deployments, semantic cache entries are namespaced by tenant
-- [ ] Cache write costs are tracked separately — they're a real cost that partially offsets read savings
-- [ ] Prompt structure is version-controlled — accidental prompt changes invalidate the cache silently
-- [ ] Your prefix meets the minimum cacheable length for your specific model version, not a generic "1,024 tokens" assumption — newer models can require more
+Done right, all three layers together serve 60–80% of inference cost and latency from cache. Only prefix caching depends on prompt structure, which is why it's where most of the wins — and most of the mistakes — live.
 
----
+### Common Questions on this topic
 
-### Common Questions
+#### 1. What is prompt caching, and how is it different from a KV cache?
 
-**What is prompt caching, and how is it different from a KV cache?**
-A KV cache is automatic and lives *within* a single request — it stops the model recomputing attention over tokens it has already processed while generating a response. Prompt (prefix) caching extends that reuse *across* independent requests, and unlike the KV cache it depends on how you structure your prompt.
+A KV cache is automatic and scoped to a single request — it's what lets a model generate tokens incrementally without recomputing attention over the whole sequence from scratch at every decode step. Prompt (prefix) caching is the cross-request extension of that idea: when a later request shares the same leading tokens as an earlier one, the platform reuses the already-computed KV state instead of reprocessing it. You don't configure a KV cache; you do configure prefix caching, by structuring your prompt so the stable content comes first.
 
-**Why is my cache hit rate low even though I've enabled caching correctly?**
-Almost always because a dynamic field — a session ID, a timestamp, per-user config — sits inside what you think is the static prefix. The cache is keyed on the exact token sequence from the first token, so the first difference truncates it. The other two causes are a prefix below the model's minimum cacheable length, and traffic too sparse for the TTL.
+#### 2. Why is my cache hit rate low even though I've enabled caching correctly?
 
-**Does prompt caching change the model's output?**
-No. Cached prefixes reuse computed attention states for identical tokens; the model sees the same input either way. Caching is a cost and latency optimization, not a behavioural one.
+The most common cause, by a wide margin, is a dynamic field — a timestamp, session ID, or per-request identifier — sitting somewhere before the end of the cacheable prefix. The cache matches on exact, byte-identical content from the first token onward, so a single changed character anywhere before the cache boundary invalidates everything after it. Move all per-request content to the very end of the prompt, after the marked cache boundary.
 
-**What's the minimum prompt length that can actually be cached?**
-It depends on the model generation. Older Claude 3.x models cache prefixes as short as 1,024–2,048 tokens; Claude Haiku 4.5 requires 4,096. Don't assume a generic threshold — check the model you're actually calling.
+#### 3. Does prompt caching change the model's output?
 
-**How many cache hits does it take before caching saves money?**
-With a 1.25× write premium and a 0.10× read rate, `h* = (w − 1) / (1 − r) = 0.25 / 0.90 ≈ 0.28` — so a single hit already puts you ahead. At the 1-hour TTL tier (2× write) the break-even moves to about 1.2 hits.
+No. Caching only affects how the input prefix is processed internally — whether the platform reuses previously computed attention states or recomputes them. The response is generated the same way either way, and providers state that output is unaffected by whether a cache hit occurred.
 
-**Is OpenAI's cached-input discount the same as Anthropic's?**
-Not universally. Anthropic charges a consistent 0.10× read rate. OpenAI's discount varies by model generation — historically 50% off for the GPT-4o family, closer to 90% off on its newest models.
+#### 4. What's the minimum prompt length that can actually be cached?
 
-**Can prompt caching and semantic caching be used together?**
-Yes, and they're complementary. Prefix caching cuts the cost of the prompt you still send; semantic caching avoids the inference call entirely for repeat queries. Prefix caching is model-level, semantic caching is something you build in your application layer.
+It depends on the provider and, on Anthropic, the specific model generation — there is no single universal number. Older Claude 3.x models cache prefixes as short as 1,024–2,048 tokens; newer models such as Claude Haiku 4.5 require at least 4,096 tokens. Below that floor, a prompt will not cache at all, no matter how many times it's repeated or how a `cache_control` marker is placed. Check the current minimum for your specific model before assuming a figure from a different model or an older Claude generation still applies.
 
-**Does moving a dynamic field to the end always fix a low hit rate?**
-No. It fixes the most common cause, but not a prefix below the minimum cacheable length, traffic sparser than the TTL, or "stable" content that isn't actually stable — a system prompt assembled with a timestamp or a randomly ordered tool list will still miss.
+#### 5. How many cache hits does it take before caching actually saves money?
 
----
+On Anthropic's standard 5-minute-tier rates (1.25× write, 0.10× read), the break-even point is about 1 cache hit — after that single hit, every additional hit is pure savings. The general formula is `h* = (w − 1) / (1 − r)`, where `w` and `r` are your provider's write and read multipliers relative to standard input price; plug in your own provider's rates to get your own break-even point.
 
-### Summary
+#### 6. Is OpenAI's cached-input discount the same as Anthropic's?
 
-Prompt caching is not a configuration checkbox — it's a structural property of your prompts that requires deliberate design.
+Not uniformly. Anthropic's read discount is a consistent 90% off (0.10×) across the Claude family, with a write premium of 1.25× to 2× depending on TTL. OpenAI's cached-read discount varies by model generation — historically 50% off on the GPT-4o family, moving up toward 90% off on newer models. Check your specific model's current rate rather than assuming one number applies across OpenAI's whole catalogue.
 
-The mechanics: prefix caching reuses computed attention states for identical leading tokens across multiple requests. A 90% discount on reads means the math is almost always favorable once a prefix is read even once more. The prerequisite is a prompt structure where all dynamic content follows the static prefix.
+#### 7. Can prompt caching and semantic caching be used together?
 
-The single most common failure mode: a dynamic field embedded in the middle of an otherwise static prompt, reducing the effective cache prefix to the tokens before that field. Moving that field to the end of the prompt can take a deployment from 7% to 74% hit rate in a single change.
+Yes, and they solve different problems, so they stack rather than compete. Prefix caching cuts the cost of reprocessing a shared prompt structure on every request. Semantic caching skips inference entirely when an incoming query is semantically similar enough to one already answered. A support bot, for example, can use prefix caching on its system prompt and tool definitions for every request, while also using semantic caching to short-circuit inference completely on the subset of queries that are near-duplicates of previous ones.
 
-The three-layer caching stack:
-1. **KV cache** — automatic, in-request, always on
-2. **Prefix/prompt cache** — cross-request, controlled by prompt structure
-3. **Semantic cache** — application layer, for high-repetition query patterns
+#### 8. Does moving a dynamic field to the end of the prompt always fix a low hit rate?
 
-With all three layers operating effectively, 60–80% of inference cost can be served from cache — reducing both cost and latency simultaneously.
+It's the single highest-leverage fix and resolves the majority of cases, including the ProjectDiscovery example this piece opens with. It won't help, though, if your prefix is below the provider's minimum cacheable length, if your traffic is too sparse to produce repeat hits within the TTL window, or if the "stable" content isn't actually identical across requests for some other reason (a template that includes a subtly varying field you haven't noticed, for instance). Reordering fixes a layout problem; it doesn't fix a traffic-shape or prefix-length problem.
 
----
+### Conclusion
 
-*This is Article 3 in a 5-part series on LLM inference in production. [Article 1](/blog/llm-bill-3x) covers the hidden anatomy of LLM API costs. [Article 2](/blog/choosing-the-right-model) covers model selection methodology. [Article 4](/blog/full-stack-ai-tco) examines total cost of ownership for a full AI stack. [Article 5](/blog/multi-provider-routing) covers multi-provider routing architecture.*
+Prompt caching is a powerful tool for reducing LLM costs and latency. It is a simple technique that can be implemented with minimal effort, but it can have a significant impact on your bottom line.
 
----
+By following the steps outlined in this article, you can implement prompt caching and start seeing cost savings and latency improvements in your LLM workloads.
+
+You can refer to the following tutorials from this **Inference in Production** series to get started:
+
+1. [Why Your LLM Bill Is 3× What You Expected](/blog/llm-bill-3x)
+2. [How to Choose the Right LLM Model for Inference Use Case](/blog/choosing-the-right-model)
+
+#### Next Steps
+
+- Implement prompt caching in your LLM workloads.
+- Monitor your cache hit rate and adjust your TTL as needed.
+- Experiment with different prompt structures to see what works best for your workload.
 
 ### References
 
-- [How We Cut LLM Costs by 59% With Prompt Caching](https://projectdiscovery.io/blog/how-we-cut-llm-cost-with-prompt-caching) — ProjectDiscovery
+- [How Does Prompt Caching Work and When Does It Actually Cut LLM Costs?](https://www.digitalocean.com/community/tutorials/prompt-caching-cost-break-even) — DigitalOcean (full break-even derivation, per-model rate tables, and a reproducible engine-level benchmark harness on a self-hosted GPU Droplet)
+- [How We Cut LLM Costs by 59% With Prompt Caching](https://projectdiscovery.io/blog/how-we-cut-llm-cost-with-prompt-caching) — ProjectDiscovery (production case)
 - [How GKE Inference Gateway improved latency for Vertex AI](https://cloud.google.com/blog/products/containers-kubernetes/how-gke-inference-gateway-improved-latency-for-vertex-ai) — Google Cloud
+- [Anthropic Prompt Caching documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) — Anthropic
 - [Prefix Caching — LLM Inference Handbook](https://bentoml.com/llm/inference-optimization/prefix-caching) — BentoML
-- [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) — Anthropic
-- [How Does Prompt Caching Work and When Does It Actually Cut LLM Costs?](https://www.digitalocean.com/community/tutorials/prompt-caching-cost-break-even) — DigitalOcean
-- [Using prompt caching](https://docs.digitalocean.com/products/inference/how-to/use-prompt-caching/) — DigitalOcean
+- [Advanced Prompt Caching](https://www.digitalocean.com/blog/advanced-prompt-caching) — DigitalOcean
 - [LLM Inference Optimization](https://www.digitalocean.com/community/tutorials/llm-inference-optimization) — DigitalOcean
-- [Advanced prompt caching](https://www.digitalocean.com/blog/advanced-prompt-caching) — DigitalOcean
+- [Serverless vs. Dedicated vs. Self-Hosted LLM Inference: When Self-Hosting Actually Gets Cheaper](https://www.digitalocean.com/community/tutorials/serverless-vs-dedicated-vs-self-hosted-llm-inference-cost) — DigitalOcean
+
+---
+
+_This is Article 3 in a 5-part series on LLM inference in production. [Article 1](/blog/llm-bill-3x) covers the hidden anatomy of LLM API costs. [Article 2](/blog/choosing-the-right-model) covers model selection methodology. [Article 4](/blog/multi-provider-routing) covers multi-provider routing architecture. [Article 5](/blog/full-stack-ai-tco) examines total cost of ownership for a full AI stack._
