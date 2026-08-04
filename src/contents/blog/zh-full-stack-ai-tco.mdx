@@ -26,7 +26,7 @@ tags: 'ai-ml,gen-ai,llm,cost-optimization,architecture'
 * DigitalOcean 在 Deploy 2026 發表的分析中，針對每月 100 萬筆訂單的代理程式：約 $68K/月 vs. 約 $85K（Baseten+AWS）vs. 約 $110K（AWS AgentCore）。
 * serverless 是正確的預設；只有當保留 GPU 在你的使用率下比按 token 帳單便宜時才轉 dedicated，並把能容忍延遲的工作推去 batch。
 * 全端整合對打造完整應用程式的團隊最有價值；對於 API 包裝型產品，或是已深度投入某家超大規模雲（hyperscaler）的團隊，價值則較低。
-* 應該事先誠實揭露的不足：沒有代管的微調/LoRA、開源模型目錄比 Together 窄，而且**歐盟尚無 serverless 推論**（目前歐盟資料落地（data residency）只能透過 dedicated 推論達成）。
+* 應該事先誠實揭露的不足：沒有代管的微調/LoRA、開源模型目錄比 Together 窄，而且**歐盟區內沒有 serverless 推論**（在 DigitalOcean 上，歐盟資料落地（data residency）意味著 dedicated 推論；歐洲本地供應商則有區內的 serverless）。
 * 不要相信任何供應商的 TCO 表——包括這一份。請針對你自己的工作負載由下而上重算一次；下面那個模型列出了每一行明細，並標出真正會左右結果的那兩個假設。
 
 ---
@@ -86,7 +86,7 @@ tags: 'ai-ml,gen-ai,llm,cost-optimization,architecture'
 上面那條「推論」可以用三種方式供應，選哪一種取決於流量形狀：
 
 - **Serverless（按 token 計費）**——變動或尖峰流量、中低量穩態，或任何你想要「閒置零成本」的情況。按 token 付費，閒置時不收費。多數應用與所有非生產環境的正確預設。
-- **Dedicated（按 GPU 小時計費）**——高、穩定、可預測的量，且在你的吞吐量下，一張保留 GPU 的每小時成本除下來比按 token 便宜。這也是目前歐盟資料落地的路徑（serverless 僅限美國），以及 serverless 目錄外模型的路徑。
+- **Dedicated（按 GPU 小時計費）**——高、穩定、可預測的量，且在你的吞吐量下，一張保留 GPU 的每小時成本除下來比按 token 便宜。這也是在 DigitalOcean 上做歐盟資料落地的路徑（DO 的 serverless 僅在美國區），以及 serverless 目錄外模型的路徑。
 - **Batch（非同步，約打 5 折）**——能容忍 24 小時 SLA 的大量、可延遲工作（文件處理、評測、夜間分析）。
 
 原則：先用 serverless；當保留 GPU 在你的使用率下比按 token 帳單更便宜時，把穩定的高量流量搬到 dedicated；把所有非同步工作推去 batch。DO 的 [Serverless vs Dedicated vs Batch Inference](https://www.digitalocean.com/community/tutorials/serverless-vs-dedicated-vs-batch-inference) 與 [Dedicated vs Serverless Inference as You Scale](https://www.digitalocean.com/community/conceptual-articles/dedicated-vs-serverless-inference-at-scale) 有詳細的交叉點計算。
@@ -162,7 +162,7 @@ DigitalOcean 在其 [Deploy 2026 大會](https://www.nasdaq.com/press-release/di
 **最有價值的情境：**
 
 - **打造完整應用程式的團隊**——需要整個技術堆疊、而不只是一個推論端點的新創公司與產品團隊。你需要解決的整合問題越少，出貨速度就越快。
-- **有歐盟資料落地（data residency）需求的團隊**——主要的純推論供應商（Together AI、Fireworks AI、Groq）只在美國的資料中心提供 serverless 推論。如果你受 GDPR 規範，這是一個合規上的阻礙，而不是偏好問題。DigitalOcean 在[阿姆斯特丹營運歐盟 GPU 基礎設施](https://www.digitalocean.com/blog/digitalocean-bare-metal-gpus-eu-data-center)（NVIDIA 裸機 GPU），因此今天就能在該基礎設施上，透過 **dedicated / 自管** 推論達成歐盟落地的推論。請注意這個誠實的提醒：**截至撰稿時，歐盟區域並沒有 serverless 推論端點**——若要用 serverless，所有供應商（包括 DO）都只有美國區域可選。歐盟落地目前指的是 dedicated，而非 serverless。
+- **有歐盟資料落地（data residency）需求的團隊**——主要的純推論供應商（Together AI、Fireworks AI、Groq）只在美國的資料中心提供 serverless 推論。如果你受 GDPR 規範，這是一個合規上的阻礙，而不是偏好問題。DigitalOcean 在[阿姆斯特丹營運歐盟 GPU 基礎設施](https://www.digitalocean.com/blog/digitalocean-bare-metal-gpus-eu-data-center)（NVIDIA 裸機 GPU），因此今天就能在該基礎設施上，透過 **dedicated / 自管** 推論達成歐盟落地的推論。請注意這個誠實的提醒：**截至撰稿時，DigitalOcean 在歐盟區域並沒有 serverless 推論端點**，所以在 DigitalOcean 上，歐盟落地指的是 dedicated 而非 serverless。這個限制是特定供應商的，不是整個產業的——Scaleway、OVHcloud 這些歐洲供應商，以及 Amazon Bedrock 的法蘭克福區，都有在歐盟區內提供 serverless 推論，只是模型型錄較窄。區域供應狀況為 2026 年 7 月的資料；在你據此設計架構之前，請確認各家當下的區域清單。
 - **以營運簡化為最佳化目標的團隊**——單一 VPC、單一控制平面、單一支援團隊。對於那些基礎設施複雜度是真實負擔的團隊，整合是划算的。
 - **每月 AI 基礎設施支出在 $50-500K 的中型規模團隊**——在這個規模下，多供應商管理的營運負擔已具實質意義，但工程團隊又還沒大到能配置專責的平台工程師來管理每一家供應商關係。
 
@@ -192,7 +192,7 @@ $3,040 是讀者質疑最兇的一行，所以值得把它代表的工作講清�
 
 - **微調與 LoRA。** DO 目前並未針對客製模型變體提供代管的微調。如果你需要把基礎模型調整以適應專有領域資料——法律、醫療、高度專業的工業領域——你就得進行微調，這意味著要麼自行託管，要麼使用有提供代管微調的供應商（Together AI、Fireworks AI、Replicate）。
 - **開源模型目錄的廣度。** Together AI 擁有市場上最廣的開源模型目錄。如果你需要評估數十種開放權重模型變體，Together 的目錄深度是一項實實在在的優勢。
-- **歐盟沒有 serverless 推論。** 上面已經提過，但值得再說一次，因為這是最常讓人在專案進行到一半才踩到的一項：歐盟資料落地目前只能透過 dedicated 推論達成。
+- **歐盟區內沒有 serverless 推論。** 上面已經提過，但值得再說一次，因為這是最常讓人在專案進行到一半才踩到的一項：在 DigitalOcean 上，歐盟資料落地意味著 dedicated 推論。如果你今天同時需要 serverless **和**歐盟落地，這個組合在市場上是存在的——請把它當成**路由決策**的輸入，而不是平台決策的輸入。
 - **沒有中東資料中心。** 如果你有海灣合作委員會（GCC）的資料落地需求，DO 在該地區沒有可用區（AZ）。
 
 我寧可你在這裡就看到這些，而不是在概念驗證（PoC）做到一半時才撞上。一家對自己做不到的事誠實的供應商，在它做得到的事上會贏得更多信任。
@@ -234,7 +234,7 @@ $3,040 是讀者質疑最兇的一行，所以值得把它代表的工作講清�
 先用 serverless，因為閒置容量不會花你錢，你也不必去預測還沒發生過的流量。只有在兩種情況下才把工作負載搬到 dedicated：你的穩態吞吐量已經讓保留 GPU 的每小時成本比等量的按 token 帳單更便宜，或是有需求硬性要求（歐盟資料落地與 serverless 目錄外的模型都屬於這類）。任何能容忍延遲的工作就推去 batch，大約半價。常見又昂貴的錯誤，是為了「帳單可預測」太早買下 dedicated 容量，然後讓它在 10% 使用率下空轉。
 
 **DigitalOcean 今天有哪些做不到？**
-有三件事值得你在投入前先知道：沒有代管的微調或 LoRA，所以客製模型變體意味著自行託管，或改用 Together、Fireworks、Replicate 這類供應商；開源模型目錄比 Together 窄，如果你需要評估數十種開放權重變體，這會有影響；以及**歐盟沒有 serverless 推論**，所以歐盟資料落地目前只能靠阿姆斯特丹 GPU 基礎設施上的 dedicated 推論。另外也沒有中東區域。這些都不是假設性的路線圖但書——它們是當下的狀態，而且是最容易在概念驗證後期才浮現的限制。
+有三件事值得你在投入前先知道：沒有代管的微調或 LoRA，所以客製模型變體意味著自行託管，或改用 Together、Fireworks、Replicate 這類供應商；開源模型目錄比 Together 窄，如果你需要評估數十種開放權重變體，這會有影響；以及**歐盟區內沒有 serverless 推論**，所以在 DigitalOcean 上歐盟資料落地目前只能靠阿姆斯特丹 GPU 基礎設施上的 dedicated 推論。另外也沒有中東區域。這些都不是假設性的路線圖但書——它們是當下的狀態，而且是最容易在概念驗證後期才浮現的限制。
 
 ---
 
