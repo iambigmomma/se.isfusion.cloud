@@ -345,9 +345,9 @@ export async function getStaticProps() {
   const library = await getAllFilesFrontmatter('library');
 
   const featuredPosts = getFeatured(blogs, [
-    'tnw-2023',
-    'era-solo-unicorns',
-    'cloud-expo-2023',
+    'inference-in-production',
+    'llm-d-doks-deploy-tutorial',
+    'nvidia-dynamo-digitalocean-tutorial',
   ]);
   const featuredProjects = getFeatured(projects, []);
   const featuredLibrary = getFeatured(library, []);

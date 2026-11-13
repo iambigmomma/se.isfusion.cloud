@@ -1,0 +1,336 @@
+---
+title: 'The Examiner Who Would Not Stop Talking: Building a telc B1 Speaking Exam on LiveKit Agents'
+description: 'How I built a mock telc B1 speaking exam on LiveKit Agents: the architecture, the five problems that cost me the most time, the trade-offs, and a measured cost of $0.70 for a full practice.'
+banner: 'examiner-would-not-stop'
+publishedAt: '2026-11-13'
+tags: 'ai-ml,gen-ai,llm,voice-ai,livekit'
+---
+> *Disclosure: I'm a Solutions Architect at DigitalOcean, so when I mention DigitalOcean products it's an informed-insider view, not a neutral one — I flag those moments clearly and keep the analysis vendor-neutral wherever the topic allows. The opinions here are my own.*
+
+I am preparing for the telc Deutsch B1 exam, and the part I worry about is the oral one: sixteen
+minutes, two candidates and an examiner, and no time to look anything up. Practice partners
+are hard to find at 11 p.m. in Munich, so I built one. **Losreden** (the code lives in a repo called `sprechtest`) runs a mock telc oral exam
+in the browser: an examiner who keeps the structure and the clock, a second "candidate" who
+argues with you, and a report with telc's own criteria and points at the end. I use it every day.
+
+This post covers how it is built on [LiveKit Agents](https://docs.livekit.io/agents/) 1.8.11, the
+five problems that cost me the most time, the trade-offs I made, and what one practice costs.
+[Part 2](/blog/losreden-turn-taking) is about one problem on its own: when an AI partner should start
+talking to someone who pauses to think. Every number comes from a run log, a commit or a config
+file in the repository. Where I describe how LiveKit behaves inside, I say whether I read it in
+the docs or observed it in the installed SDK and my logs.
+
+### TL;DR
+
+- **Losreden** is a mock telc B1 oral exam in the browser, built on LiveKit Agents 1.8.11: one `AgentSession` with two voices (a scripted examiner and an LLM partner), a hidden observer, and a scorer that reports telc's own criteria.
+- **Every model I tried ignored "one to three sentences".** Cutting the reply in code (`llm_node`) raised the candidate's share of the words from 54 / 42 / 48 % to 71 / 62 / 74 % across the three parts.
+- **Validate an instrument where it will run.** A smoothed frame clock beat arrival stamps on localhost (5 ms vs 25 ms SD) and lost on LiveKit Cloud (90 ms vs 3–5 ms).
+- **Silent defaults cost the most debugging time:** agents ignoring other agents (`participant_kinds`), and `set_attributes()` doing nothing without `can_update_own_metadata`.
+- **Latency:** 1.34 s median `e2e_latency` over 31 partner turns, most of it a deliberate one-second wait.
+- **Cost:** a whole 16-minute practice measured $0.70; the LLM judge is the largest item at about 40 %.
+
+### Why build it at all
+
+The telc B1 oral exam has three parts. Teil 1 is getting to know each other (about 3 minutes).
+In Teil 2 the two candidates have read opposite opinions on a topic: each reports theirs, and then
+they discuss it (about 6 minutes). Teil 3 is planning something together (about 6 minutes). telc
+allows an *Einzelprüfung*, where one examiner moderates and a second examiner plays your partner.
+That format suits software: one scripted voice for the moderator, one LLM voice for the partner.
+
+What I wanted from a practice tool:
+
+- **The real structure and timing**, with telc's examiner phrases, not a free chat.
+- **A partner who talks like a B1 candidate** and leaves room for me to talk.
+- **Feedback on telc's criteria**: Ausdrucksfähigkeit, Aufgabenbewältigung, Formale Richtigkeit,
+  and Aussprache, each in bands A–D, with points out of 75.
+- **No stored audio.** My voice goes to speech recognition and nowhere else.
+
+### The architecture
+
+![Losreden architecture](/images/blog/losreden/architecture.png)
+
+One exam, from click to report:
+
+1. **The browser** talks to a small **Next.js** server: log in, pick a task set, read the task
+   sheet during the preparation time, press start.
+2. `POST /api/exams/<id>/start` **spawns one exam CLI per exam**: `python -m sprechtest.telc
+   --candidate human --room <id>`. The CLI starts an agent worker (`agents/worker.py`, registered
+   as `agent_name="sprechtest"`), creates an explicit **dispatch** with metadata `{role, telc_set,
+   parts}`, joins a hidden **observer**, and waits for the exam to end.
+3. The browser joins the **LiveKit Cloud** room as `candidate` with a token from the server.
+4. The **examiner job** is a single `AgentSession`: Deepgram Nova-3 STT → LiveKit's turn
+   detector → `gpt-5.4-nano` → Deepgram Aura-2 TTS. It has **two voices**: Herr Roth, the scripted
+   examiner (`aura-2-fabian-de`), and Frau Becker, the LLM partner (`aura-2-kara-de`).
+5. **Every process appends to one `events.jsonl`** with `O_APPEND`, stamped with the same host
+   clock: the CLI, the agent, the observer. No audio is stored, only text and timestamps.
+6. When the examiner says the closing line, the CLI **scores** the log: the transcript per part,
+   fluency from the observer's timestamps, a pronunciation proxy from Deepgram's word confidence,
+   and the language bands from **Claude Opus 5.5** as judge, rated three times, median band per
+   criterion. The web app reads `report.json`.
+
+Models and where they run:
+
+| Job | Model | Route |
+|---|---|---|
+| Speech recognition | Deepgram Nova-3 | direct, Deepgram EU endpoint, own key |
+| Voices | Deepgram Aura-2 (German) | direct, Deepgram EU endpoint |
+| Turn detection | LiveKit turn detector | LiveKit Inference |
+| Partner / examiner LLM | `openai-gpt-5.4-nano` | DigitalOcean Serverless Inference (OpenAI-compatible) |
+| Judge | `anthropic-claude-opus-5.5` | DigitalOcean Serverless Inference |
+
+I work at DigitalOcean, which is why the models run there. The DigitalOcean endpoint is
+OpenAI-compatible, so the LLM is LiveKit's `openai.LLM` plugin with a different `base_url`. Every model block in `config/default.yaml` takes `via: digitalocean |
+inference | direct`. That one design choice paid for itself twice, as you will see below.
+
+#### One session, two roles
+
+![one session, two roles](/images/blog/losreden/two-roles.png)
+
+The examiner's lines are fixed text from telc's practice test, so they do not go through the LLM:
+`session.say(text, audio=<examiner TTS stream>, add_to_chat_ctx=False,
+allow_interruptions=False)`. Each part is its own `PartAgent` with that part's task and the
+partner's own task sheet. At a part change the code calls
+`session.update_agent(PartAgent(next_part, chat_ctx=current.chat_ctx.copy()))`, so Frau Becker
+remembers what you told her in Teil 1. **The clock is code, not prompt**: each part runs for its
+telc minutes and then ends at the next pause.
+
+### Five problems, and what fixed them
+
+#### 1. Every model ignored "one to three sentences"
+
+**Symptom.** In the live A2·B1 run (`telc-smoke-a2b1`) the partner spoke as many words as
+the candidate: 778 against 782. In an exam where *you* are being assessed, that is half your
+speaking time gone.
+
+**Root cause.** The prompt said "in kurzen Beiträgen (meist ein bis drei Sätze)". I ran the partner
+against a simulated B1 learner in text (`tests/text_sim_telc.py`) with six models. Every one
+first summarised what the candidate had just said, then added its own point. With `gpt-5.4-nano`
+her median turn was 65, 182 and 130 words in Teil 1, 2 and 3; GPT-4.1 gave 54 / 118 / 93; Claude
+5.5 Haiku 100 / 77 / 69. A stricter prompt ("never summarise, at most 3 short sentences") helped
+but did not hold: nano's raw replies were still 58 / 83 / 48 words.
+
+**Fix.** Cut the reply in code. `PartAgent` overrides `llm_node`, feeds the streamed text through
+`cap_sentences()`, yields only the complete sentences it keeps, and returns after sentence *N*.
+*N* is 3, except in B1 Teil 2 (5, because she has to report her magazine text) and A2·B1 Teil 3
+(4, where she argues an opinion). A sentence ends at `. ! ? …` followed by whitespace, with
+exceptions for "Dr.", "ca.", "bzw.", ordinals and the like. Because only kept text is yielded, TTS
+never sees the rest. The cap adds nothing to the time to first audio: the first sentence streams
+straight through.
+
+**Evidence.** Same task, same model, same bot (commit `300e27e`): spoken turns dropped to
+35 / 69 / 38 words and the candidate's share of the words rose from 54 / 42 / 48 % to
+71 / 62 / 74 %. In the live run `telc-do-live-1` the cap fired 19 times (once in Teil 2, where *N*
+is 5), and the candidate had 61 % of the words (1,201 vs 762) and 62 % of the speaking time
+measured in the room (369 s vs 224 s).
+
+![The sentence cap, before and after](/images/blog/losreden/cap.png)
+
+The cap has a cost, and the two-roles diagram above shows it: in one 149-word reply it kept 47 words and also
+dropped her closing question, "Wie ist es bei Ihnen?". The turn then ends on a statement. For an
+exam that trade is right. The candidate is supposed to carry the conversation.
+
+#### 2. The nudge that measured silence from one side
+
+**Symptom.** telc says the examiner steps in "carefully" when a conversation stalls. My first
+version had the partner ask an open question after 12 s of silence. In `telc-smoke-1` it fired
+**42 times** in one exam (8, 15 and 19 in the three parts), and the partner talked over the bot.
+
+**Root cause.** "Silence" was measured from the candidate's last word, so the partner's own speech
+counted as the candidate being silent. The logged `silent_s` grew from 17 s to 184 s across the
+exam: every partner turn produced the next nudge.
+
+**Fix.** `last_activity` is updated when *either* side starts or stops speaking, the nudge needs
+`user_state != "speaking"` and `agent_state == "listening"`, and there are at most 2 per part
+(`should_nudge()` in `agents/examiner.py`, commit `dea9405`).
+
+**Evidence.** The next two live runs, `telc-smoke-a2b1` and `telc-do-live-1`, logged zero
+`telc_nudge` events. (While writing this I found the docstring said "23 nudges"; the log says 42.
+It is fixed.)
+
+#### 3. A clock validated on localhost was wrong on Cloud
+
+**Symptom.** The fluency score depends on the hidden observer: it subscribes to every audio track
+and timestamps speech onsets and offsets. I validated two ways of timestamping against a test
+signal. On the local dev server, a smoothed frame clock beat raw arrival times
+(absolute SD 5 ms vs 25 ms).
+
+**Root cause.** On LiveKit Cloud this reversed: the smoothed clock was off by 90 ms SD, arrival
+times by 3–5 ms. Over a real network, delivery gaps and jitter-buffer adaptation break the
+"continuous samples" assumption behind smoothing. Gap measurements passed in both modes (slope
+0.998–1.001), so only an absolute-time check caught it.
+
+**Fix.** `observer.timestamping: arrival`, validated on Cloud. The lesson I keep: validate the
+instrument where it will run.
+
+#### 4. Silent defaults: agents that cannot hear agents, and attributes that never arrive
+
+**Symptom.** Two things fail with no error at all: an agent that should listen to another agent
+hears nothing, and participant attributes that one side sets never reach the other.
+
+**Root cause** (found by reading the installed SDK and the token code, not from the docs).
+`RoomOptions.participant_kinds` defaults to SIP and standard participants, so an agent session
+ignores other agents. My bot candidate is an agent, so the examiner would never have heard it. And
+the tokens I minted lacked the `can_update_own_metadata` grant, so `set_attributes()` silently did
+nothing. Roles only resolved because the code fell back to the participant identity.
+
+**Fix.** `participant_kinds=ALL_KINDS` (standard, SIP and agent) in `agents/common.py`, and the
+grant in `lk.py`. Losreden now relies on attributes for the role handshake and for the
+`sprechtest.voice` attribute the web page uses to light up the right speaker card.
+
+#### 5. The free tier shaped the architecture
+
+**Symptom.** In early tests on the free plan, two calls at once got HTTP 429 on the STT handshake,
+the session closed with `recoverable=False`, and a bot waited for a reply that never came. Later
+the Cartesia voices stopped mid-setup with HTTP 402.
+
+**Root cause.** As I read LiveKit's plan page on 2026-11-08, the Build plan's Inference allows 5
+concurrent STT and 5 TTS connections and $2.50 of usage a month, shared across a user's free
+projects. Cartesia's free credit ran out within an hour.
+
+**Fix.** Configuration, not code: `models.stt.via: direct` sends STT to Deepgram's EU endpoint
+with my own key, and the voices became Deepgram Aura-2 on the same key. That also kept the
+candidate's audio in the EU for STT. The turn detector stays on LiveKit Inference. The one thing
+lost: Aura-2's German voices have no speed control, so the "speak slower for A2" knob does nothing
+until Cartesia comes back.
+
+#### Four smaller ones
+
+- **The answer in the wrong part.** A part could end right after the partner asked a question, so
+  the candidate's answer was spoken under the next part's introduction and scored there.
+  `end_of_part()` now waits for the answer to an open question (up to 20 s) before it moves on
+  (commit `2eaafd9`). In `telc-do-live-1` no answer was cut off at a part change.
+- **CPU on a 4-vCPU droplet.** Three live voice calls at once pushed the load average to 20 and the
+  measured latencies drifted; py-spy put most of the time in per-frame FFI plumbing, not my code. So
+  the server runs one live call at a time (`webapi.capacity()`, `MAX_CALLS = 1`) and queues the next
+  learner. The worker's `load_threshold` is 0.95, because the framework's production default of 0.7
+  turned exam calls away while the machine was busy.
+- **The status race.** A finished exam sometimes showed "no report": the status route checked for
+  the report first and the process second, and a report written between the two checks looked
+  missing. Checking the process first fixed it (commit `86dd2e1`).
+- **The 2.8-second click.** I clicked "Goethe" on the dashboard and nothing happened for about three
+  seconds. Every dashboard and new-exam page asked a small Python command for the exam catalog, and that
+  command imported `sprechtest.agents.common` for one string constant. That pulled in `livekit.agents`,
+  which took 1.4 s to import (its inference module loads the whole `openai` type tree, plus telemetry),
+  2.5 s for the whole import. `python -X importtime` found it in one run. The constant moved to a module
+  that imports nothing, `livekit.api` is now imported only by the token command, the web keeps the
+  catalog until a YAML file changes, and in-app links show a progress bar. A call went from 2.8 s to
+  0.6 s, and the dashboard-to-new-exam click from about 3 s to 0.1 s on staging (commits `5e42857`,
+  `7ba21b7`). The lesson for anything that shells out per request: measure the import, not just the work.
+
+### The latency budget
+
+![one turn's latency budget](/images/blog/losreden/latency.png)
+
+Over the 31 partner turns of `telc-do-live-1`, the framework's `e2e_latency` was **1.34 s median**
+(p90 2.34 s). The biggest item is a deliberate one-second wait: an examiner lets you think, so
+endpointing waited at least 1.0 s in this run (`telc.turn_taking`). It now waits 2.0 s, and part 2
+explains why. The LLM's time to first token was 0.84 s median (p90 1.03 s) and TTS first audio
+0.14 s (p90 0.31 s).
+
+Those do not add up to 1.34 s, and the logs show why: in 22 of 31 turns, `e2e_latency` was shorter
+than end-of-turn + TTFT + TTFB. The LLM had started on the STT final, during the endpointing wait.
+That fits preemptive generation, which the installed SDK enables by default. I saw it in the logs;
+I did not check it against the docs.
+
+Two numbers are missing from the framework's view. Earlier measurements with the same observer
+found that `stopped_speaking_at` comes about 0.14 s after the speech really ends, and the audio
+needs about 0.16 s more to reach a listener. So what the candidate hears is closer to 1.5–1.6 s. That is an
+estimate, not a measurement from this run.
+
+### Trade-offs
+
+| Decision | What I chose | What it costs | Evidence |
+|---|---|---|---|
+| One session or two agents | One `AgentSession`, examiner via `say()` with its own TTS | Two voices from one participant; the browser needs a `sprechtest.voice` attribute to know who speaks | `agents/examiner.py` |
+| Prompt or code for turn length | Prompt *and* a cap in `llm_node` | Sometimes cuts her closing question | Candidate share 54/42/48 % → 71/62/74 % |
+| Deepgram direct or LiveKit Inference | Direct, EU endpoint, own key | Separate billing; Inference STT is listed at $0.0048/min vs $0.0077 direct | `config/default.yaml`, 429s and 402s above |
+| Choosing the LLM | By p90, not median | Gemini 3.1 Flash Lite had the faster median | nano 0.80 s / 0.92 s p90; Gemini 0.67 s / **1.76 s** p90 (text sims) |
+| Trusting framework metrics | Keep a hidden observer next to them | One more participant and process per exam | `e2e_latency` under-reports by ~0.3 s (observer measurements) |
+| Privacy or pronunciation | No audio stored; Aussprache from STT word confidence | It is a proxy: microphones, noise and names lower it too | `observer.store_audio: false`; report caveats |
+| CLI per exam or worker pool | A CLI and worker per exam | Slow start, one call per droplet at a time | `web/src/lib/server/py.ts`, `webapi.capacity()` |
+| One judge rating or three | Three in parallel, median band | 3× judge tokens | Three ratings differed by at most one band on one criterion |
+| Opus or a cheaper judge | Opus 5.5, until teachers have rated | About 40 % of a whole exam's cost | On six stored runs Sonnet 5.5 scored 7 points lower on average, Haiku 5.5 10; Opus against itself agreed on 91 % of bands |
+| How long she waits | Fixed `min_delay` 2.0 s, `false_interruption_timeout` 3.0 s | She answers about 1 s later | She cut into 13 % of a learner's pauses instead of 50 % (part 2) |
+
+### What one practice costs
+
+Since 10 November every run writes a `usage.json`: STT seconds, TTS characters per voice, LLM and
+judge tokens from the framework's metrics events, multiplied by list prices checked on 2026-11-09
+(`config/prices.yaml`: Deepgram Nova-3 $0.0077/min, Aura-2 $0.030 per 1k characters, nano $0.20 /
+$1.25 per million tokens, Opus 5.5 $4 / $20, LiveKit $0.0005 per participant-minute, turn detector
+$0.50 per 1k requests). The two runs below are bot runs. A bot candidate has its own STT, TTS and
+LLM, so I took its share out to get what a person's exam costs.
+
+| Practice | STT | TTS | LLM | Judge (3×) | LiveKit | Turn detector | **Total** |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| telc B1 Teil 1 (3.5 min) | 0.027 | 0.040 | 0.004 | 0.176 | 0.005 | 0.006 | **$0.26** |
+| telc B1 whole exam (16 min) | 0.124 | 0.217 | 0.038 | 0.277 | 0.024 | 0.023 | **$0.70** |
+
+![Where the money goes in one practice](/images/blog/losreden/cost.png)
+
+About NT$22 for a whole mock exam. Before I metered it, I had estimated $0.49; the judge ($0.28
+measured, $0.13 assumed) and the voices (7,244 characters, about 45 % more than I assumed) were
+the two items I got wrong. The judge is the largest item: 40 % of a whole exam and two thirds of a
+one-part practice, because each of its three ratings carries the full rubric and instructions
+however short the practice was. The conversation LLM is only about 5 %. The 20-minute preparation costs nothing, because no call
+is open during it.
+
+I tested the obvious lever, a cheaper judge, on six stored runs re-scored with today's code
+(`docs/judge-comparison.md`, $2.2). Opus 5.5 scored again agreed with its earlier bands 91 % of
+the time, so the gaps below are the models, not noise. Sonnet 5.5 matched Opus on 58 % of the
+bands and scored 7 points lower on average (up to 16). Haiku 5.5 matched 53 % and scored 10 lower
+(up to 20). Both were stricter, never wildly wrong. Switching would change what learners see, not
+just the bill, so Opus stays until teachers have rated enough transcripts to say which judge is
+closer to them.
+
+![Three judges, six stored runs](/images/blog/losreden/judges.png)
+
+The levers that do not change the scores come first: caching the judge's repeated
+prompt, a third rating only when the first two disagree, and pre-synthesized audio for the
+examiner's fixed lines.
+
+### Beyond telc B1
+
+The same engine now runs more than one exam. Each format is a YAML file with a step flow:
+dialogue, monologue (the AI stays silent while you present) and a partner who gives her own talk.
+telc B1, A2·B1 and B2 run on it, and so do Goethe-Zertifikat B1 and B2, with task sets written in
+the official format by us, because official task material may not be reused commercially. Around
+it there is an invite-only trial with credits and the metering behind the table above, feedback in
+the learner's language (繁中, Deutsch or English) with the corrections in German, three minutes of
+telc B1 Teil 1 without an account at `/try`, and pages where a teacher rates a pseudonymised
+transcript band by band before seeing the AI's score. Nobody has rated yet, which is why the judge
+comparison above is against Opus and not against teachers.
+
+### What comes next
+
+- **Teacher ratings**: about 30 rated transcripts per format before I describe the scores as
+  "within one band of a teacher".
+- **Cost without changing scores**: the judge and voice levers above.
+- **A worker pool instead of a CLI per exam**: a long-running worker on its own droplets, with the
+  web server dispatching jobs through the LiveKit API. That removes the one-call limit.
+- **TestDaF**: recorded answers to a timer instead of a conversation, the cheapest format to run.
+
+### What I would ask LiveKit for
+
+These come from places where I lost hours, not from a wish list.
+
+1. **Say when a default drops something.** A log line when an agent session ignores a participant
+   because of `participant_kinds`, and a warning when `set_attributes()` is called without
+   `can_update_own_metadata`. Both cost me a debugging session with no error to start from.
+2. **Listener-side latency.** `e2e_latency` starts at `stopped_speaking_at` and ends when audio
+   leaves the agent. A documented offset, or an optional measurement at a subscriber, would save
+   everyone from building their own observer.
+3. **Mark preemptive replies in the metrics.** A flag on the turn would make the latency numbers
+   add up without guessing.
+4. **A turn-length budget as a first-class option.** Every model I tried ignored "three sentences".
+   A `max_sentences` on the agent, or a documented `llm_node` recipe, would make that the default
+   path rather than an override.
+5. **Clearer free-tier failures.** A 429 on the STT handshake closed the session as unrecoverable.
+   An error that names the plan limit would have saved a lot of confusion.
+6. **A light import path.** `import livekit.agents` takes about 1.4 s, most of it in modules a
+   given program never uses. Lazy imports for the inference and telemetry modules would make small
+   helper scripts on the same codebase start fast.
+
+I learned more about real-time voice from this one practice tool than from any tutorial. The model was
+the easy part; the time went into timing, silences and defaults. If you are building on LiveKit and
+want to compare notes, I would like to hear from you.

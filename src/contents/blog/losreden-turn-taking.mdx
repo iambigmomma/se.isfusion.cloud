@@ -1,0 +1,234 @@
+---
+title: 'The Partner Who Could Not Wait: Tuning LiveKit Turn-Taking for Language Learners'
+description: 'Language learners pause mid-thought, and an AI exam partner who jumps in is unfair. Eight LiveKit turn-taking settings tested over 40 scripted calls, and why the LLM''s speed turned out to be part of the policy.'
+banner: 'partner-could-not-wait'
+publishedAt: '2026-11-13'
+tags: 'ai-ml,gen-ai,llm,voice-ai,livekit'
+---
+> *Disclosure: I'm a Solutions Architect at DigitalOcean, so when I mention DigitalOcean products it's an informed-insider view, not a neutral one — I flag those moments clearly and keep the analysis vendor-neutral wherever the topic allows. The opinions here are my own.*
+
+Language learners pause. They pause in the middle of a sentence while they look for a word, and they pause
+just as often right after a sentence that is grammatically complete: "Ich komme aus Taiwan. [2 s] Also, ich
+wohne jetzt in Köln." To a turn detector trained on fluent speech, that second pause sounds like the end of
+a turn.
+
+My mock speaking exam, **Losreden** ([part 1](/blog/losreden-livekit-voice-exam) describes how it is built on LiveKit Agents),
+has an AI exam partner. In an exam, the most unfair thing she can do is take the floor in the middle of the
+candidate's thinking pause. So I set up a lab to find out how often she did that, and which settings stop it.
+
+The lab took 58 calls and cost $8.09. It also found two bugs in my own harness. The result I did not expect:
+**the LLM's speed is part of the turn-taking policy**. With the old settings, the partner cut into learners'
+pauses twice as often after midnight as before it, because the LLM provider was faster at night.
+
+Everything here is from livekit-agents 1.8.11, a scripted learner and telc B1 Teil 1 (getting to know each
+other). The full build log, with every run, is `docs/turnlab-buildlog.md` in the repository.
+
+### TL;DR
+
+- **The test:** eight LiveKit turn-taking settings, 40 calls with a scripted, synthesized B1 learner who pauses the same way every time, measured by a hidden observer in the room. The whole lab took 58 calls and $8.09.
+- **A 3.0 s `false_interruption_timeout` was the clearest win:** the partner resumed over a learner's "Äh, ähm." in 15 of 15 cases at 2.0 s and 3 of 15 at 3.0 s.
+- **Adaptive barge-in was worse for learners,** and dynamic endpointing did not help within one part of an exam: it starts low, learns slowly, and resets at every `update_agent()`.
+- **The LLM's speed is part of the policy.** With `min_delay` below the LLM's time to first token, the old settings cut into 29 % of finished-sentence pauses before midnight and 64 % after, because the provider got faster.
+- **What I chose:** fixed 2.0 / 5.0 s, timeout 3.0 s, VAD barge-in. It cut into 13 % of all pauses against 50 %, and the price is a reply about 1 s later.
+
+### The advice I started from
+
+A thread on the LiveKit community forum about turn detection for non-native speakers gave four suggestions:
+
+1. Use **dynamic endpointing** (`mode: dynamic, min_delay: 0.5, max_delay: 5.0`), so the agent learns how
+   long this speaker pauses.
+2. Raise **`false_interruption_timeout`** (default 2.0 s) to about the length of a learner's pauses.
+3. Prefer **VAD barge-in over the adaptive interruption model**, which was presumably trained on native
+   speakers who backchannel. Learners hardly do.
+4. **Measure against where the speaker really stopped**, not against the framework's own end-of-speech.
+
+All four sound right, and I could have flipped them on and called it done. I read the installed source
+first, because it costs nothing.
+
+### What the source said that the thread did not
+
+Five things changed the experiment before I made a single call:
+
+- **The adaptive interruption model was never on.** When the interruption mode is not set and the worker
+  runs in production mode, `AgentActivity._resolve_interruption_detection` returns no detector. Every exam
+  job logs `adaptive interruption is disabled by default in production mode`. So my exams already used VAD
+  barge-in. For me, the condition to test was *turning adaptive on*.
+- **Dynamic endpointing forgets at every handoff.** `AgentActivity.start` builds a new endpointing object,
+  and `session.update_agent()` starts a new activity. My exam switches agents at every part (three in telc
+  B1, seven steps in Goethe B1), so what it learned about a candidate in Teil 1 is gone in Teil 2. I added
+  a carry-over: read the learned value before the switch and pass it on with
+  `session.update_options(endpointing_opts={"min_delay": learned})`.
+- **Dynamic starts lower than what I had.** It learns `min_delay` upward from the configured value (an
+  exponential moving average with alpha 0.9, so each pause moves it 10 % of the way) and never goes below it.
+  My fixed delay was 1.0 s, and the suggested floor is 0.5 s. Until it has seen a few pauses, it is *quicker*
+  to cut in.
+- **Which pauses `min_delay` is for.** With the turn detector, `max_delay` (5.0 s) applies when the model
+  thinks the sentence is unfinished, and `min_delay` when it thinks the turn may be over. So pauses in the
+  middle of a sentence are mostly the detector's job. `min_delay` matters after a *finished* sentence, which
+  is exactly where a learner stops to think.
+- **What counts as a false interruption.** On a barge-in the agent pauses its audio. A final transcript with
+  words turns that into a real interruption. Only a barge-in without words ends in
+  `false_interruption_timeout`: a lone "Ähm" that the STT drops. Then the agent resumes its sentence, over a
+  learner who is still looking for the next word. One more detail: `interruption.min_duration` is 0.5 s, so a
+  short "Ähm" does not interrupt at all. My first synthesized "Ähm." was 0.30 s long. The script uses longer
+  fillers.
+
+### The harness: a learner who pauses the same way every time
+
+An LLM bot would pause differently in every run, so I wrote a **scripted learner** instead. It has 16 turns
+for telc B1 Teil 1. Each chunk of speech is synthesized once with Deepgram Aura-2 and cached, with the
+leading and trailing silence cut. Every condition therefore hears the same audio with the same silences:
+
+- 9 pauses after a finished sentence, 7 in the middle of one, and 3 after a filler, each 1.2–3.0 s;
+- 4 turns that start while the partner is talking (a barge-in) and then pause.
+
+The learner is a plain room participant. It sends a steady 10 ms frame stream, like a microphone. It knows
+when she has finished from her `lk.agent.state`, and it reacts after 0.7 s.
+
+**Measured from outside.** The numbers come from a hidden observer in the room. It runs an energy VAD on both
+tracks and stamps each frame on arrival. On LiveKit Cloud, a smoothed frame clock was 90 ms off where
+arrival stamps were 3–5 ms off; I found that when I validated the observer on Cloud. A pause counts as **cut** if her voice
+is heard after the pause began and before the learner's next chunk is over. For a barge-in I measured how
+long she kept talking, and whether she started again inside the same turn (*resumed over*). I checked that
+against the framework's own `agent_false_interruption(resumed=true)` events.
+
+Every new setting went into config with the old behaviour as the default. A test checks that the defaults
+still produce exactly the old options.
+
+### Two bugs in my own harness
+
+The first smoke run (old settings, $0.16) gave a loud number: the partner took the turn in **8 of 9** pauses
+after a finished sentence. That would have made a great headline. It was my bug.
+
+Printing the timeline, instead of trusting the table, showed the learner's clock was bimodal: its lag to the
+observer was either 0.17 s or about 0.8 s. The network was not the cause; the end-of-chunk lag was a steady
+0.14 ± 0.01 s. Aura-2 starts some clips with a 10 ms click at −42 dBFS and then about 0.75 s of silence, and
+my trim kept everything after the first voiced window. So some "exact" pauses were 0.75 s longer than
+scripted. With the trim starting at the first 50 ms run of speech, the baseline cut in after **1 of 9**
+finished sentences, not 8.
+
+The second bug: barge-ins came too late. The learner judged "she is talking" from her audio energy, which
+drops between her sentences, so 2 of 4 barge-ins landed in a gap or after she had finished. The learner now
+uses her `lk.agent.state`, which says "speaking" for the whole reply.
+
+The other lesson from the smoke runs: one run per condition says nothing. Two runs of the *same* settings
+cut into 21 % and 32 % of all pauses. From then on, every condition got 5 runs, interleaved (A1 B1 C1 … A2
+B2 …), about 5 minutes and $0.14 each.
+
+### Eight conditions, 40 calls
+
+Per condition: 45 pauses after a finished sentence, 35 in the middle of one, 15 after a filler and 20
+barge-ins. *Gap* is the time from the learner's last word to her voice.
+
+| | Setting | Cut-in after a finished sentence | Mid-sentence | Resumed over the learner (barge-ins) | Gap median / p90 |
+|---|---|---|---|---|---|
+| A | old: fixed 1.0 / 5.0 s, VAD barge-in, timeout 2.0 s | 29 % | 0 % | 75 % | 2.95 / 6.75 s |
+| B | dynamic 0.5 / 5.0 s | 33 % | 3 % | 75 % | 2.81 / 6.72 s |
+| C | B + timeout 3.0 s | 36 % | 9 % | **15 %** | 2.85 / 7.01 s |
+| D | C + adaptive barge-in | 29 % | 14 % | 90 % | 2.80 / 5.93 s |
+| E | fixed 2.0 / 5.0 s | 22 % | 9 % | 70 % | 3.95 / 5.85 s |
+| F | A, resume off | **80 %** | 20 % | 0 % | 2.19 / 5.82 s |
+| G | A + timeout 3.0 s | 64 % (see below) | 9 % | 25 % | 2.63 / 5.92 s |
+| H | fixed 2.0 / 5.0 s + timeout 3.0 s | 22 % | 3 % | 30 % | 3.67 / 6.65 s |
+
+Point by point against the forum advice:
+
+1. **Dynamic endpointing did not help within one part of an exam.** B against A, 33 % against 29 %, is inside
+   the run-to-run spread. It starts at 0.5 s, passes the old fixed 1.0 s only after about two minutes
+   (1.9–3.2 min), and ends the four-minute script at 1.2–1.5 s, nowhere near 2.0 s. telc B1's Teil 1 lasts
+   about 3 minutes. The carry-over fixes the reset at each part, not the slowness.
+
+   ![The learned min_delay over 15 dynamic runs](/images/blog/losreden/learning.png)
+2. **A 3.0 s `false_interruption_timeout` is the clearest win.** A learner who says "Äh, ähm." and then
+   searches for words for 2.4–3.0 s had the partner start her sentence again over them in 15 of 15 cases at
+   2.0 s, and in 3 of 15 at 3.0 s (B against C). The thread was right.
+3. **Adaptive barge-in is worse for learners, as the thread guessed** (D against C). It classifies "Äh, ähm."
+   and "Ja, aber …" as backchannels, so she keeps talking for 0.9 s (0.6 s with VAD) and resumes in 18 of 20
+   barge-ins. None of those went through the false-interruption timer: a backchannel verdict resumes her at
+   once, so a longer timeout does not help there.
+4. **Measuring from the room changed the answer.** Condition F turned off `resume_false_interruption`, and
+   cut-ins after finished sentences went from 29 % to 80 %. She is not quicker in F. With resume on, a reply
+   committed just before the learner goes on is *paused before its first audio frame* and then dropped when
+   the learner's words arrive, so the learner never hears it. With resume off nothing pauses, and she gets
+   0.1–0.6 s of speech out before the learner's voice interrupts her. The framework's own `interrupted` count
+   looks the same either way. Only a listener in the room hears the difference.
+
+   ![Resume on or off](/images/blog/losreden/resume.png)
+
+One trace shows why even a 2.0 s `min_delay` can cut into a 2.4 s pause. The learner stops at 0.00. The
+framework's user state turns `listening` at 0.07. The turn is committed at 2.07, the agent is `speaking` at
+2.15, and her voice is heard at 2.52, 0.12 s after the learner went on. Preemptive generation had the reply
+ready at the commit, so the audible cut-in comes at about `min_delay` + 0.45 s.
+
+![One cut-in, step by step](/images/blog/losreden/cutin-trace.png)
+
+### The finding I did not expect: the LLM's speed is part of the policy
+
+Condition G cut in after 64 % of finished sentences, against 29 % for A. G only adds the longer timeout,
+which has nothing to do with endpointing; C against B showed no such jump. The difference was the hour. A to
+E ran from 21:57 to midnight, F to H from 00:02 to 01:15. After midnight, the LLM on DigitalOcean Serverless
+Inference got faster: its median time to first token went from 1.05 s to 0.87 s.
+
+So I ran a control in one window (01:16–02:36): A, G, H and a new I (fixed 1.5 s), interleaved, 4 runs each.
+
+| | Setting | Cut-in after a finished sentence | All pauses | Resumed over "Ähm" | Her voice per cut-in | Gap median / p90 |
+|---|---|---|---|---|---|---|
+| A | old: fixed 1.0 s, timeout 2.0 s | **64 %** (29 % before midnight) | 50 % | 100 % | 0.55 s | 2.64 / 6.60 s |
+| G | fixed 1.0 s, timeout 3.0 s | 61 % | 36 % | 25 % | 0.53 s | 2.72 / 6.57 s |
+| I | fixed 1.5 s, timeout 3.0 s | 44 % | 28 % | 25 % | 0.55 s | 3.10 / 5.82 s |
+| **H** | **fixed 2.0 s, timeout 3.0 s** | **22 %** | **13 %** | **17 %** | **0.22 s** | 3.68 / 6.37 s |
+
+![Cut-ins by min_delay and hour](/images/blog/losreden/turn-hour.png)
+
+The mechanism: with `min_delay` at 1.0 s, the reply is *not* ready when the turn is committed, because it
+needs about 1.05 s. She starts about 1.2 s after the commit, so the learner hears her about 2.7 s after they
+stopped. The old settings' apparent patience came from the LLM being slow. When the provider is faster, she
+starts about 0.35 s after the commit and lands inside the learner's pause. With `min_delay` at 2.0 s, the
+preemptively generated reply is always ready at the commit, so she is heard about 2.7 s after the learner
+stopped whatever the provider does that hour. The fixed 2.0 s delay gave 22 % before midnight (E) and 22 %
+after it (H, in both windows).
+
+**The lesson for anyone tuning this:** if `min_delay` is below your LLM's time to first token, your real
+delay is the LLM's, and it moves with the provider's load. Measure at more than one time of day.
+
+### What I chose, and what it costs
+
+```yaml
+telc:
+  turn_taking: {mode: fixed, min_delay: 2.0, max_delay: 5.0}
+  interruption: {mode: null, false_interruption_timeout: 3.0}
+```
+
+- **Fixed, not dynamic.** Dynamic starts below what learners need and learns too slowly for a 3–6 minute
+  part. Dynamic mode and the carry-over stay in the code as options.
+- **VAD barge-in, not adaptive.** A learner's filler is not a backchannel.
+- **Resume stays on.** It is what keeps a reply that comes just too early from being heard at all.
+- **The price:** she answers about 1 s later, a median of 3.7 s from the learner's last word to her voice
+  (p90 6.4 s). For an exam partner that is the right side to err on. telc's own guidance is that the examiner
+  lets the candidate finish. If it feels slow in practice, 1.5 s (condition I) is the next step down, at
+  about twice the cut-ins.
+
+In the same hour, the chosen settings cut into 13 % of all pauses against 50 % for the old ones. After a
+learner's "Ähm", she resumed over them 17 % of the time against 100 %. The settings went live on
+2026-11-11 after one whole-exam check.
+
+**What this does not cover.** One voice, one script and one task type, with the clean audio of a synthesized
+learner. Real learners pause in more places and for longer. Teachers rating real transcripts is the next
+check (see part 1).
+
+### What I would ask LiveKit for
+
+1. **Keep what dynamic endpointing learned across `update_agent()`**, or document that it resets. A
+   multi-agent flow loses it at every handoff today.
+2. **Say in the docs that `min_delay` is a floor, not the delay.** Below the LLM's time to first token, the
+   provider's latency sets the real delay, and that changes with the hour.
+3. **An "audible" flag on interruption metrics.** A reply that was paused before its first frame and dropped
+   counts as `interrupted` just like one the user heard. A flag would let people see what F showed without
+   building an observer.
+4. **A note on adaptive interruption and non-native speech.** Fillers like "Äh, ähm." are classified as
+   backchannels. That is fine for fluent speakers and wrong for learners. It is off by default in production
+   mode, which is the right default, but the reason is worth a sentence.
+
+Reading the source before the first call saved me from testing a setting that was already off, and printing
+timelines instead of trusting the summary table caught both of my own bugs. The result I was not looking for
+only showed up when I ran the same test at a different hour.
