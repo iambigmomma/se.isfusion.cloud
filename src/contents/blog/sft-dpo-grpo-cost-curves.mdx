@@ -1,0 +1,131 @@
+---
+title: 'When You Have Labels, More SFT Beats GRPO and DPO per GPU-Hour'
+description: 'SFT, DPO and GRPO from the same checkpoint on one H100, scored by GPU-hours instead of steps. More SFT reached 0.8905 in 0.36 GPU-hours. GRPO plateaued at 0.873 after 2.46, and DPO ended below where it started.'
+banner: 'sft-dpo-grpo-cost-curves'
+publishedAt: '2026-10-26'
+tags: 'ai-ml,gen-ai,llm,fine-tuning,gpu'
+---
+> *Disclosure: I'm a Solutions Architect at DigitalOcean, so when I mention DigitalOcean products it's an informed-insider view, not a neutral one — I flag those moments clearly and keep the analysis vendor-neutral wherever the topic allows. The opinions here are my own.*
+
+This experiment does not evaluate or compare any vendor's product. The H100 price used in the cost projection ($4.41 per GPU-hour) is DigitalOcean's list price as of 2026-11-10. Every conclusion below is stated in GPU-hours, so none of them depends on that price.
+
+Post-training comparisons usually line methods up by step count or epochs. That hides the thing a budget owner pays for. A GRPO step and an SFT step are different amounts of work, so I put all three methods on one axis, **GPU-hours on one H100**, and asked what each one costs to reach a given quality.
+
+From one shared SFT checkpoint at 0.865 exact-record accuracy, more SFT reached 0.8905 in 0.36 GPU-hours. GRPO reached 0.873 in 2.46. DPO ended at 0.8525, below where it started. The ordering held across two seeds.
+
+This is the first of two posts on the experiment. [The second](/blog/grpo-bill-not-generation) covers where GRPO's GPU time went and why it stalled.
+
+### TL;DR
+
+- **The test:** Qwen3-1.7B with LoRA, one task (Wikipedia biography to a 5-field JSON record), three arms branching from the same SFT checkpoint: more SFT (A), SFT then DPO (B), SFT then GRPO (C). Cost is wall-clock seconds of the training process on one H100. Two seeds, 2,000 held-out documents.
+- **At equal spend, more SFT is 2.55 points ahead of GRPO** (0.8905 against 0.865 at 0.358 GPU-hours, McNemar p = 0.0002).
+- **At equal quality, GRPO needs 5 to 18× the GPU-hours** once you ask it to stay at the level, depending on seed. It never reaches 0.8905 in 2.46 GPU-hours (its best checkpoint is 0.876).
+- **DPO lost quality in both seeds.** The gold answer became less likely while the preference metrics improved.
+- **This is a labels-available result.** GRPO's reward here is computed against the same gold records SFT trains on. The case where GRPO earns its cost, no labels and a reward that can only check structure, is not tested.
+
+### The setup
+
+| | |
+|---|---|
+| Task | Wikipedia biography (WikiBio lead paragraph, 40 to 300 words) to a JSON record `{name, birth_date, birth_place, death_date, death_place}`, dates ISO or null |
+| Model | Qwen3-1.7B, non-thinking mode, LoRA r = 16 on all linear layers, bf16 |
+| Shared start | SFT on 2,000 labelled documents, 2 epochs: base model 0.7055, then **0.865** |
+| Arm A | More SFT on a 10,000-document pool, 3 epochs, lr 2e-4 |
+| Arm B | DPO on 3,676 pairs from the pool (chosen = gold record, rejected = worst of 4 SFT samples), β 0.1, lr 1e-5. Pair sampling is charged to B |
+| Arm C | GRPO on the pool's prompts, 8 rollouts × 16 prompts per step, vLLM colocated, TRL 1.17.1 defaults, lr 2e-5, 1,200 steps, capped at 2.5 GPU-hours |
+| Reward | Rule-based: schema validity, fraction of the 5 fields correct, a penalty for ungrounded values. It compares against the gold record |
+| Metric | Exact-record accuracy (all 5 fields right) on 2,000 held-out documents, greedy decoding |
+| Cost | Wall-clock seconds of the training process on one H100 80GB, model load included. Evaluation is not charged |
+| Significance | McNemar's exact test on paired per-document results, p < 0.05 |
+
+The output conventions are stated in the prompt, so a policy could in principle discover them by trial. I set it up that way to give GRPO a fair chance. An earlier, independent run of mine (Qwen2.5-1.5B, intent and slot parsing) found the same ordering: from a 0.640 start, more SFT reached 0.743, GRPO 0.662 and DPO 0.502.
+
+### The curves: A rises, GRPO plateaus, DPO falls
+
+![Exact-record accuracy against cumulative GPU-hours for the three arms, both seeds](/images/blog/post-training/cost_curves.png)
+
+Solid lines are seed 0 and dashed lines seed 1. Every point is a checkpoint evaluated on the same 2,000 documents. The zoom covers the first 0.36 GPU-hours, which is all of Arm A and DPO:
+
+![Zoom on the first 0.36 GPU-hours](/images/blog/post-training/cost_curves_zoom.png)
+
+### At equal spend, 2.55 points ahead
+
+Each arm is read at its latest checkpoint within the budget:
+
+| budget | Arm A | GRPO | DPO | A vs GRPO (A better / GRPO better, p) |
+|---|---|---|---|---|
+| 0.242 h (DPO's full spend), seed 0 | 0.889 | 0.8745 | 0.8525 | 83 / 54, p = 0.016 |
+| 0.358 h (A's full spend), seed 0 | 0.8905 | 0.865 | ended at 0.242 h | 117 / 66, p = 0.0002 |
+| 0.359 h (A's full spend), seed 1 | 0.886 | 0.858 | ended at 0.240 h | 131 / 75, p = 0.0001 |
+
+Across every Arm A checkpoint budget, A is significantly ahead of GRPO at 10 of 25 budgets in seed 0 and 16 of 25 in seed 1. GRPO is significantly ahead at 1 and 2. All three of those fall between 0.07 and 0.10 GPU-hours, where Arm A dips in both seeds (0.830 in seed 0). In the dips, Arm A fills `birth_place` where the gold is null. By 0.11 GPU-hours it is back above GRPO. There is no crossover: GRPO never takes a lead it keeps.
+
+### At equal quality, 5 to 18× the GPU-hours
+
+The ratio depends on what "reaches" means. I count a target as reached only when the arm **stays at or above it from then on**:
+
+| quality target | Arm A | GRPO | ratio |
+|---|---|---|---|
+| 0.873 (GRPO seed 0 final) | 0.133 h | 2.399 h | 18× |
+| 0.872 (GRPO seed 1 final) | 0.232 h | 1.180 h | 5.1× |
+| 0.8905 (Arm A final) | 0.190 h | never (best of any GRPO run: 0.876) | not reached |
+
+The more generous "first checkpoint at or above" gives 4.1× in seed 0 and 28× in seed 1. I don't lean on either. In seed 0, GRPO's first touch of 0.873 is only 0.8 points above its start, inside one standard error of a single checkpoint (about 0.75 points on 2,000 documents). In seed 1, GRPO spent 0.5 to 0.9 GPU-hours in the collapse described in part 2, which inflates the first-touch figure.
+
+GRPO's final is above the start in both seeds, but modestly: +0.8 points, p = 0.036 in seed 0 and p = 0.065 in seed 1.
+
+### Why DPO lost quality
+
+Both DPO seeds show likelihood displacement. DPO widened the gap between the chosen and rejected answers mostly by pushing the rejected one down, and the gold answer fell with it:
+
+| DPO, first to last 10% of steps | seed 0 | seed 1 |
+|---|---|---|
+| chosen (gold) mean log-prob | −1.69 to −3.73 | −1.72 to −3.58 |
+| rejected mean log-prob | −3.65 to −9.91 | −3.51 to −9.81 |
+| preference accuracy | 0.58 to 0.69 | 0.53 to 0.70 |
+
+The preference metrics improved while the policy got worse at the task. On the eval set the new errors were mostly places. In seed 0, missed birth places rose from 110 to 120, wrong birth places from 55 to 80, and missed death places from 23 to 41. DPO's best checkpoint came early in both seeds (0.8705 at 0.087 h, 0.8715 at 0.095 h), and neither best is significantly above the start. A dashboard that tracked preference accuracy alone would have shown steady progress.
+
+### Cost projection
+
+Charged GPU-hours from this run, at $4.41 per H100-hour:
+
+| to reach | Arm A | GRPO |
+|---|---|---|
+| 0.873, and stay there | 0.133 h, $0.59 | 2.399 h, $10.58 |
+| 0.8905 (Arm A's final) | 0.358 h, $1.58 | not reached in 2.46 h ($10.84 for the full run) |
+
+The whole experiment came to about 6.9 charged GPU-hours, roughly $30. The absolute numbers are small because the task is small. What carries over is the ratio and its cause, which part 2 takes apart.
+
+### What would change the answer
+
+- **Labels.** Here GRPO's reward is computed against the gold record, so GRPO and SFT get the same information. If the pool had no labels and the reward could only check schema and grounding, Arm A would not exist. That is the case where GRPO has a reason to be used, and this experiment does not test it.
+- **Where the start sits.** The shared checkpoint is already right on most documents, and 80 to 98% of GRPO's rollout groups gave no gradient (part 2). A weaker start or a harder task would give it more signal. I did not run GRPO from the base model.
+- **Arm A's learning rate.** The early dips are the only budgets where GRPO wins. A lower SFT learning rate or a longer warmup would probably remove them, which would turn one of my predictions from wrong to right. I did not test it.
+- **Where Arm A branches.** Five times the labels bought Arm A only 2 to 3 points, so the branch point sits near SFT's plateau. I also ran GRPO from the top of Arm A's curve: one GPU-hour gave a best of 0.893 and a final of 0.8865, no significant change from Arm A alone.
+
+### Predictions, scored
+
+I registered ten predictions in a file committed before any training step ran. Six held, two were wrong, and two held in only one seed. The two that were wrong:
+
+- **I predicted Arm A would never be significantly below GRPO at matched GPU-hours.** It was, at 1 budget in seed 0 and 2 in seed 1, all inside Arm A's early dip.
+- **I predicted any reward hacking would take the form of nulls**, with recall falling and precision rising. At the finals it did not. Seed 1 showed exactly that pattern in the middle of the run and then recovered. Right about the failure mode, wrong as a statement about the result.
+
+Both misses come from transient behaviour: Arm A's dip lasted one or two checkpoints and GRPO seed 1's collapse about six. A curve with fewer checkpoints could have hidden both.
+
+### What I got wrong
+
+- **Throughput.** I estimated SFT at about 18k tokens/s from the earlier run's 1.5B model. It ran at about 7.4k. GRPO's planned 2,000 steps became 1,200 so its cosine schedule could finish inside the cap.
+- **My first matched-budget table** stopped at DPO's end (0.24 GPU-hours) and missed the 0.24 to 0.36 range where Arm A is furthest ahead. **My first zoom chart** labelled Arm A at an intermediate checkpoint, so the number looked like its final. Both were fixed before this write-up.
+- **The estimate.** I budgeted about 9.4 GPU-hours. The run used about 6.9 charged.
+
+### Limits
+
+- **One task, one model, one GPU.** Full fine-tuning or a larger model could change per-step costs and the ceiling.
+- **No hyperparameter search for any arm.** Arm A's lr, DPO's β and lr, and GRPO's TRL defaults were fixed in advance. The comparison is between reasonable defaults, not best cases.
+- **Two seeds,** and GRPO seed 1 is a shorter, capped run that stopped at step 606 of its 1,200-step schedule.
+- **Label noise sets the ceiling.** About 90% of wrong fields in every arm are places. The labels come from Wikipedia infoboxes filtered against the text, and many place errors are cases where the text names a place the infobox does not, or the span is one comma-part longer or shorter. GRPO's reward inherits the same noise.
+- **The cost clock** is one process on one GPU with vLLM colocated. A separate vLLM server on its own GPU would change GRPO's accounting: generation would overlap training but use a second GPU.
+- **Statistical power.** One checkpoint's standard error is about 0.75 points, so every claim of significance uses a paired McNemar test rather than comparing two scores.
+
+Code, configs, per-checkpoint costs and per-document outputs: [github.com/iambigmomma/post-training-cost-curves-v2](https://github.com/iambigmomma/post-training-cost-curves-v2). Data derived from WikiBio (Lebret, Grangier and Auli, 2016), text from Wikipedia under CC BY-SA 3.0.

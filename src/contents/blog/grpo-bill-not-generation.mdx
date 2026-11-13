@@ -1,0 +1,117 @@
+---
+title: 'GRPO''s Bill Is Not Generation: Where the GPU Time Went, and Why It Stalled'
+description: 'Generation was 5% of a GRPO run on one H100. Half the time went to the backward pass, and 96 to 98% of rollout groups had nothing to teach. Plus a null collapse that a flat training reward hid.'
+banner: 'grpo-bill-not-generation'
+publishedAt: '2026-11-02'
+tags: 'ai-ml,gen-ai,llm,fine-tuning,gpu'
+---
+> *Disclosure: I'm a Solutions Architect at DigitalOcean, so when I mention DigitalOcean products it's an informed-insider view, not a neutral one — I flag those moments clearly and keep the analysis vendor-neutral wherever the topic allows. The opinions here are my own.*
+
+This experiment does not evaluate or compare any vendor's product. The H100 price used below ($4.41 per GPU-hour) is DigitalOcean's list price as of 2026-11-10, and every conclusion is stated in GPU-hours.
+
+A common expectation is that GRPO is expensive because generation is expensive: eight rollouts per prompt, sampled at temperature 1.0. In [part 1](/blog/sft-dpo-grpo-cost-curves), GRPO needed 5 to 18× the GPU-hours of plain SFT to reach the same quality on a JSON extraction task. This post is about why. I put timers around TRL's methods and logged the training signal at every step.
+
+Generation turned out to be about 5% of the bill. The rest was the trainer, and most steps taught the model nothing.
+
+### TL;DR
+
+- **Generation plus weight sync was 5.3% of GRPO's GPU time.** The cost is set by prompt length: each rollout generates about 44 tokens but carries a roughly 327-token prompt through the training model three times.
+- **Backward pass and optimizer step were 49%,** the no-grad forward pass for log-probs 21%, and the grad forward pass 22%.
+- **96 to 98% of rollout groups had zero reward variance by the end of training.** In seed 0, 55% of logged steps had a gradient norm of exactly 0.
+- **Neither variant I tried helped:** training only on hard prompts, or running GRPO after SFT had used every label.
+- **One seed collapsed to null on death fields, and the training reward barely moved.** The eval curve caught it. A per-step null-rate would have caught it sooner.
+
+### The setup, briefly
+
+Qwen3-1.7B with LoRA r = 16, one H100 80GB, vLLM colocated with the trainer. The task is Wikipedia biography to a 5-field JSON record, scored by exact-record accuracy on 2,000 held-out documents. GRPO ran from a shared SFT checkpoint at 0.865: 8 rollouts × 16 prompts per step, temperature 1.0, up to 160 new tokens, TRL 1.17.1 defaults (β = 0, `loss_type="dapo"`, vLLM importance-sampling correction on), lr 2e-5, 1,200 steps with a 2.5 GPU-hour cap. Part 1 has the full table.
+
+### Where the GPU time went
+
+Timing taps around TRL's methods, seed 0, 8,847 seconds in total:
+
+| part of a GRPO step | seconds | share |
+|---|---|---|
+| vLLM generation | 393 | 4.4% |
+| weight sync to vLLM | 79 | 0.9% |
+| rest of `_generate` (tokenising, bookkeeping) | 94 | 1.1% |
+| reward function | 18 | 0.2% |
+| no-grad forward pass for the trainer's own log-probs | 1,861 | 21.0% |
+| grad forward pass (`compute_loss`) | 1,916 | 21.7% |
+| backward pass and optimizer step | 4,360 | 49.3% |
+| model load, vLLM start, checkpoint saves | 88 | 1.0% |
+
+Generation plus weight sync is 5.3%, and all of `_generate` is 6.4%. The other GRPO runs split the same way, within a point.
+
+The reason is token counts. Each rollout generates about 44 tokens, but the prompt (the biography plus instructions) is about 327 tokens, and the training model processes that whole sequence three times: a no-grad forward pass, a grad forward pass and a backward pass. GRPO pushed 57.3M tokens through the training model against 11.2M for the same-task SFT arm, and generated 6.8M tokens on top.
+
+Part 1 uses a toy-sized task, and so do the dollar figures here. What transfers is the formula: step cost scales with prompt tokens × rollouts × three trainer passes, not with completion length.
+
+### The no-grad pass nobody asked for
+
+The no-grad forward pass exists only for vLLM importance-sampling correction, which is on by default. With β = 0 and one iteration per batch, nothing else uses those log-probs. Turning the correction off would cut about a fifth of GRPO's time and narrow the ratios in part 1 by the same fifth, without closing them.
+
+I did not test this. The correction exists for a reason: without it, GRPO trains on samples from a vLLM copy whose numerics differ from the trainer's, which could change what it learns. Treat the 21% as a ceiling on the saving, not a recommendation.
+
+### Why it stalled: most groups had nothing to teach
+
+GRPO learns only from groups whose 8 rollouts receive different rewards. The shared checkpoint is already right on most documents, and at temperature 1.0 it is nearly deterministic: 6,324 of the 10,000 pool prompts gave 4 exact samples out of 4 when I sampled DPO pairs.
+
+| GRPO run | zero-variance groups, first / middle / last 10% of steps | entropy, first to last |
+|---|---|---|
+| seed 0 | 80% / 97% / 98% | 0.0045 to 0.0007 |
+| seed 1 | 70% / 95% / 96% | 0.0071 to 0.0009 |
+| hard prompts only | 54% / 91% / 94% | 0.0105 to 0.0010 |
+| after Arm A | 84% / 97% / 96% | 0.0029 to 0.0006 |
+
+In seed 0, 131 of 240 logged steps (55%) have a gradient norm of exactly 0. All 16 prompts in the step gave 8 identical rewards, so the step changed nothing, and it still paid for three trainer passes. From 1.1 GPU-hours to its end at 2.46, seed 0 sat between 0.8675 and 0.876. Its last 15 checkpoints read 0.872 to 0.873.
+
+### Two variants that did not help
+
+![GRPO from the shared checkpoint (left) and GRPO after Arm A (right)](/images/blog/post-training/phase5_grpo_variants.png)
+
+- **Hard prompts only.** Training used only the 3,676 prompts where at least one of four SFT samples was wrong, with the pair-sampling cost charged. It ended at 0.8725 (best 0.876), the same as GRPO on all prompts. Its zero-variance share started lower (54%) and still reached 94%. Filtering prompts delays the loss of signal but does not prevent it.
+- **GRPO after more SFT.** This tests the other branch point, after SFT has used every label. GRPO started from Arm A's final checkpoint (0.8905). One GPU-hour gave a best of 0.893 (18 fixed, 13 broken, p = 0.47) and a final of 0.8865 (9 fixed, 17 broken, p = 0.17). That is 1.35 GPU-hours from the shared checkpoint for no significant change over SFT alone.
+
+### The collapse the training reward did not show
+
+Seed 1 had a mid-run failure. At step 240 (0.51 GPU-hours) exact-record fell to 0.795, with non-null recall at 0.871 and precision at 0.982. The model had started returning null for fields the text supports. I counted, per field, how often the gold had a value and the output had null:
+
+| gold non-null, output null | step 150 | step 240 | step 606 (end) | gold non-null total |
+|---|---|---|---|---|
+| death_place | 39 | 131 | 28 | 136 |
+| death_date | 1 | 181 | 1 | 258 |
+| birth_place | 97 | 176 | 106 | 750 |
+| birth_date | 0 | 13 | 0 | 1,158 |
+
+At the bottom of the dip the model answered null for 131 of 136 death places and 181 of 258 death dates, and for 176 of 750 birth places, up from 97 at step 150. This is the failure mode I had predicted: a null where the gold has a value scores lower than the correct value, but not by much, and the policy drifted into it rather than being paid for it. I would not call it reward hacking in the strict sense.
+
+It recovered without intervention: 0.876 by 0.999 GPU-hours and 0.872 at the end. The training reward barely moved through the collapse, between 0.95 and 0.98, because a missing field costs 0.16 on one document and death fields are non-null in a small share of documents. The 128-rollout sample dumps I wrote every 100 steps showed it only weakly. The eval curve is what caught it.
+
+A per-field null rate logged at every training step would have caught it live. If you run GRPO on a structured-output task where one field is mostly null, that logging line is cheap insurance.
+
+### What would change the answer
+
+- **Prompt-to-completion ratio.** Here the cost is three trainer passes over about 371 tokens per rollout. For tasks with short prompts and long completions, such as reasoning traces, generation's share would rise and the composition above would not hold.
+- **Where the start sits.** With 80 to 98% of groups giving no gradient, GRPO was starved of signal. A weaker start (the base model is at 0.7055) or a harder task would give it more mixed groups. I did not run GRPO from the base model.
+- **Labels.** The reward is computed against gold records, the same information SFT gets. Without labels, SFT is not available and GRPO has a job.
+- **A separate vLLM server.** Generation would overlap training but occupy a second GPU, which changes the accounting rather than the compute.
+
+### Cost
+
+GRPO's seed 0 run was 2.46 GPU-hours, $10.84 at $4.41. The SFT arm reached higher quality in 0.358 GPU-hours, $1.58. The absolute figures are small because the task is small. The mechanism is not: GRPO's step cost scales with prompt tokens × rollouts × three trainer passes, and its benefit is bounded by how many rollout groups disagree.
+
+### What I got wrong
+
+- **The sample dumps were too small.** Sixteen prompts every 100 steps could not show seed 1's death-field collapse clearly. A null-rate log would have.
+- **The training reward looked healthy through the worst of it.** I had treated reward as the primary health signal. On a sparse field, it is not.
+- **My reward-hacking prediction was wrong as a statement about the result.** The failure I predicted showed up mid-run in one seed and then vanished by the final checkpoint. Transient behaviour like that is only visible if you evaluate often.
+
+### Limits
+
+- **One task, one model, one GPU,** with vLLM colocated. The 5.3% generation share depends on a short-completion task.
+- **Two seeds,** and seed 1 stopped at step 606 under a 1.25 GPU-hour cap.
+- **No hyperparameter search.** GRPO ran on TRL's defaults. Different group sizes, temperature or learning rate could change how often groups carry signal.
+- **Timing taps measure TRL's methods,** not the CUDA kernels beneath them. The 49.3% for backward and optimizer is the remainder after the taps, not a separate measurement.
+- **Per-field null counts above** are computed from the saved per-document eval outputs against the held-out gold labels.
+
+Code, configs and per-step logs: [github.com/iambigmomma/post-training-cost-curves-v2](https://github.com/iambigmomma/post-training-cost-curves-v2).
